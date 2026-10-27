@@ -4,6 +4,8 @@
 
 **当前默认镜像已改为纯原生 CLI**：不安装或运行 Qt、X11、Xvfb、DBus、VNC/noVNC。HiDev 短信认证已用官方 10781.21.0.0831 的原生 CLI 实测失败，客户端返回需要动态口令后直接回主菜单，没有验证码输入流程。详见 [实测记录](docs/cli-mfa-proof.md)。**此项目目前不能完成纯命令行短信认证。**
 
+后续原型已验证：同一厂商引擎可独立进入 CSDK/RPC 模式，纯 Python 前端能够收到启动通知，全程无需 GUI。这提供了替换交互菜单的研究路径，但登录请求与短信会话尚未实现，见 [独立引擎实测](docs/native-rpc-research.md)。
+
 ```text
 Windows 应用（SSH / HTTP / UDP）
     → WireGuard 虚拟网卡（仅配置的目标 CIDR）
