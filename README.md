@@ -2,6 +2,8 @@
 
 **实验项目，尚不是开箱即用的 VPN 产品。** 目标是在 Docker 中连接多套 UniVPN，让 Windows 按网段直接访问内网 IP，而非逐个映射 SSH 端口。
 
+**当前默认镜像已改为纯原生 CLI**：不安装或运行 Qt、X11、Xvfb、DBus、VNC/noVNC。HiDev 短信认证已用官方 10781.21.0.0831 的原生 CLI 实测失败，客户端返回需要动态口令后直接回主菜单，没有验证码输入流程。详见 [实测记录](docs/cli-mfa-proof.md)。**此项目目前不能完成纯命令行短信认证。**
+
 ```text
 Windows 应用（SSH / HTTP / UDP）
     → WireGuard 虚拟网卡（仅配置的目标 CIDR）
@@ -15,12 +17,13 @@ Windows 应用（SSH / HTTP / UDP）
 | 配置校验、单次短信会话状态、禁止自动重复提交 | 有单元测试；不等于真实厂商登录已通过 |
 | 按 CIDR 的双向转发/SNAT、普通出口回落阻断 | 独立 Linux namespace 集成测试通过；使用 veth 模拟隧道，非真实 VPN |
 | Windows WireGuard 配置 | 模板；待端到端验证 |
-| 终端输入账号密码及短信验证码 | 实验 AT-SPI 后端；尚未取得厂商实际控件映射 |
-| Qt 控件的终端交互 | 自建 Qt 窗口的 DBus/AT-SPI 集成测试通过；非厂商真实登录 |
-| 无桌面、无 VNC/noVNC 镜像 | 已提供构建文件；构建及厂商运行兼容性待验证 |
-| 原生无图形 UniVPNCS 的短信认证 | 未支持；厂商手册明确说明 Linux CLI 的 SSL VPN 仅支持用户名/密码 |
+| 默认纯原生 CLI 镜像 | 已构建并运行；Qt/Xvfb/DBus/VNC 包检查为空 |
+| 原生无图形 UniVPNCS 的短信认证 | 10781.21.0.0831 + HiDev 实测失败；返回动态口令错误后回主菜单 |
+| 早期 Qt 控件终端交互实验 | 仅保留研究代码；不在默认镜像内执行，不属于纯原生 CLI 短信支持 |
 
-厂商 GUI 和命令行程序是两种不同的认证入口。这里不声称给 Expect 加一个 OTP 参数就能扩展厂商 CLI。短信后端的目标是**用户只操作终端**，镜像内部仍保留官方 GUI 及最小 Xvfb/DBus/AT-SPI 运行环境，不安装完整桌面，不运行远程桌面服务。不通过 UI 坐标盲点，也不自动接受未知证书。
+默认 CLI 镜像停在登录菜单时，单次样本约 12.5 MiB；这不是已连接 VPN 的稳态测量，不包含 Docker Desktop/WSL 的平台开销。
+
+厂商 GUI 和命令行程序是两种不同的认证入口。隐藏 GUI 的终端操作桥不等于纯命令行客户端。现在以**完全不依赖图形栈**为默认目标；短信需要另行确认可用的非 GUI 认证接口、SDK 或兼容客户端，不承诺现有 CLI 能通过增加 OTP 参数实现。
 
 ## 构建（Linux amd64）
 
@@ -40,23 +43,22 @@ docker compose build
 
 将 `examples/vpn.json` 复制为 `private/vpn.json`，填写实际网关、目标 CIDR、Windows 接入地址和真实服务探针。最初用单机 `/32`，不要猜测整个 `/8` 都属于内网。当前就绪探针要求目标主动发送固定前缀的 banner，例如 SSH；这只用于检查 VPN，不限制转发协议为 SSH。
 
-先不创建 `private/wg0.conf`，启动认证实验：
+先不创建 `private/wg0.conf`，启动原生 CLI：
 
 ```powershell
 docker compose up -d
-docker compose exec vpn vpnctl inspect-ui
+docker compose attach vpn
 ```
 
-`inspect-ui` 只读取当前可见控件的名称与角色，不读取输入框内容。输出可能包含账号相关控件名称，勿原样提交公共 issue。
-
-**当前必须在实际厂商客户端上取得并验证控件选择器。** `examples/ui.example.json` 只是结构示例，不是可直接使用的映射。将真实映射保存为 `private/ui.json`。若 AT-SPI 看不到控件，此后端暂不可用；不要凭猜测把输入填入其他控件。
+在厂商 CLI 菜单中选择 `GATEWAY` 连接并登录。仅适用于账号密码认证；遇到动态口令要求时停止，不要把验证码盲发到主菜单。保持会话运行，可用 `Ctrl-P`、`Ctrl-Q` 分离终端而不停止容器。运行状态检查：
 
 ```powershell
-docker compose exec vpn vpnctl login
 docker compose exec vpn vpnctl status
 ```
 
-账号在终端输入，密码和验证码隐藏输入，不作为命令行参数或环境变量传递。一次 login 只提交一次密码、至多一次验证码；不自动重新登录或重复发短信。验证码超时则停止提交，保留当前客户端会话供排查。当前没有自动断线重认证。
+凭据在厂商终端中输入，不写入 Docker 启动参数或环境变量。厂商 CLI 会回显账号，默认关闭 Docker 日志持久化。当前没有自动断线重认证。`vpnctl login` 和 `inspect-ui` 仅适用于早期图形实验，默认 CLI 镜像会拒绝这两个操作。
+
+早期 `gui-experimental` 构建目标保留作研究参考，不是默认 Compose 路径；其自建 Qt 控件测试通过不代表厂商短信已验证，也不符合“完全无图形依赖”的使用要求。
 
 ## 网段转发实验
 

@@ -8,7 +8,7 @@ RUN test -n "$UNIVPN_SHA256" \
     && (/tmp/univpn.run S > /tmp/install.log 2>&1; \
         test -x /usr/local/UniVPN/UniVPN || { cat /tmp/install.log; exit 1; })
 
-FROM ubuntu:22.04 AS terminal
+FROM ubuntu:22.04 AS gui-experimental
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pyatspi at-spi2-core dbus-x11 xvfb \
@@ -23,9 +23,27 @@ COPY univpn_gateway /opt/gateway/univpn_gateway
 COPY scripts/vpnctl /usr/local/bin/vpnctl
 RUN chmod 755 /usr/local/bin/vpnctl
 ENV USER=root HOME=/root DISPLAY=:1 QT_X11_NO_MITSHM=1 \
+    VPN_BACKEND=gui \
     QT_ACCESSIBILITY=1 QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 \
     DBUS_SESSION_BUS_ADDRESS=unix:path=/run/univpn/bus \
     XDG_RUNTIME_DIR=/run/user/0 PYTHONPATH=/opt/gateway \
     LD_LIBRARY_PATH=/usr/local/UniVPN/lib
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD vpnctl status
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/bin/python3", "-m", "univpn_gateway.runtime"]
+
+# Default build: official native CLI only, with no Qt/X11/DBus/VNC packages.
+FROM ubuntu:22.04 AS cli
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 iproute2 iptables wireguard-tools ca-certificates tini \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=install /usr/local/UniVPN/serviceclient /usr/local/UniVPN/serviceclient
+COPY --from=install /usr/local/UniVPN/promote /usr/local/UniVPN/promote
+COPY --from=install /lib/libgmcrypto.so /lib/libgmcrypto.so
+COPY univpn_gateway/__init__.py univpn_gateway/cli.py univpn_gateway/config.py univpn_gateway/gateway.py univpn_gateway/profile.py univpn_gateway/runtime_cli.py /opt/gateway/univpn_gateway/
+COPY scripts/vpnctl /usr/local/bin/vpnctl
+RUN chmod 755 /usr/local/bin/vpnctl
+ENV USER=root HOME=/root PYTHONPATH=/opt/gateway VPN_BACKEND=cli \
+    LD_LIBRARY_PATH=/usr/local/UniVPN/serviceclient
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD vpnctl status
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/bin/python3", "-m", "univpn_gateway.runtime_cli"]

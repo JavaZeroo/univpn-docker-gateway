@@ -3,7 +3,7 @@ services:
     image: univpn-docker-gateway:local
     build:
       context: .
-      target: terminal
+      target: cli
       args:
         UNIVPN_SHA256: ${UNIVPN_SHA256:?Set the installer SHA256 in .env}
     cap_add: [NET_ADMIN]
@@ -21,9 +21,9 @@ services:
     mem_limit: 384m
     cpus: 0.5
     pids_limit: 128
+    stdin_open: true
+    tty: true
     restart: "no"
     logging:
-      driver: json-file
-      options:
-        max-size: 1m
-        max-file: "1"
+      # The vendor CLI echoes usernames. Keep interactive authentication out of logs.
+      driver: none

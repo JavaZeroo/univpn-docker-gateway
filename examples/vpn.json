@@ -4,6 +4,5 @@
   "vpn_interface": "cnem_vnic",
   "allowed_cidrs": ["10.80.0.11/32"],
   "wireguard_client": "10.203.0.2/32",
-  "probe": {"host": "10.80.0.11", "port": 22, "banner_prefix": "SSH-2.0-"},
-  "ui_mapping": "/config/ui.json"
+  "probe": {"host": "10.80.0.11", "port": 22, "banner_prefix": "SSH-2.0-"}
 }

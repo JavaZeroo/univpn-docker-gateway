@@ -54,6 +54,8 @@ def main():
             else:
                 gateway.disable()
             return 0
+        if os.environ.get("VPN_BACKEND") == "cli":
+            raise ValueError("native CLI backend: use docker compose attach vpn; SMS is unsupported by the vendor CLI")
         from .accessibility import AccessibleUI
         ui = AccessibleUI()
         if args.command == "inspect-ui":
