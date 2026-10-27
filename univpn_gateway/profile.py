@@ -8,8 +8,9 @@ def profile(config):
         "[GLOBAL]\niConnectionType = 1\nDescription =\n"
         "sign_certificate =\nencryp_certificate =\n"
         f"GatewayAddress = {config['gateway']}\nGatewayPort = {config['port']}\n"
-        "TunnelMode = 2\nPreflinkEnable = 0\nDefaultGateway = -1\n"
-        "iroutecoverEnable = 1\nigmalgorithmEnable = 0\nPreflinkTotal = 0\n")
+        f"TunnelMode = {config.get('tunnel_mode', 2)}\nPreflinkEnable = 0\nDefaultGateway = -1\n"
+        f"iroutecoverEnable = {config.get('route_cover', 1)}\n"
+        f"igmalgorithmEnable = {config.get('gm_algorithm', 0)}\nPreflinkTotal = 0\n")
     (directory / "sysconfig.ini").write_text(
         "[GLOBAL]\nClientName = UniVPN\nClientCustomized = false\n"
         "[ADVANCED]\nClientDetectLatestVersion = 0\nClientAutoBoot = 0\n"

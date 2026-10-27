@@ -1,5 +1,4 @@
 import argparse
-import fcntl
 import getpass
 import json
 import os
@@ -35,12 +34,46 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
     sub.add_parser("inspect-ui", help="local widget names/roles only; never read text values")
-    sub.add_parser("login", help="one interactive login; no automatic retries/SMS resend")
+    login_command = sub.add_parser("login", help="one interactive login; no automatic retries/SMS resend")
+    login_command.add_argument("--no-otp", action="store_true", help="return after the SMS challenge; use vpnctl sms later")
+    sub.add_parser("sms", help="submit a code to the existing native authentication session")
+    sub.add_parser("cancel", help="cancel the current pending native authentication attempt")
     route = sub.add_parser("gateway")
     route.add_argument("action", choices=["enable", "disable"])
     args = parser.parse_args()
     try:
         config = load(args.config)
+        if os.environ.get("VPN_BACKEND") == "native":
+            from .native_control import send
+            if args.command == "status":
+                result = send("status")
+                print(json.dumps(result))
+                return 0 if result.get("data_plane_ready") else 1
+            if args.command in ("login", "sms", "cancel"):
+                if args.command != "cancel" and not sys.stdin.isatty():
+                    raise ValueError("interactive credentials require a TTY")
+                if args.command == "login":
+                    username = input("VPN username: ")
+                    password = getpass.getpass("VPN password: ")
+                    result = send("login", username=username, password=password)
+                    del password
+                    if result.get("state") != "awaiting_sms" or args.no_otp:
+                        print(json.dumps(result))
+                        return 0 if result.get("state") in ("awaiting_sms", "authenticated") else 1
+                    print("SMS requested. Keep this session; enter the latest code below.")
+                else:
+                    result = send("status")
+                if args.command == "cancel":
+                    print(json.dumps(send("cancel", attempt_id=result["attempt_id"])))
+                    return 0
+                if result.get("state") != "awaiting_sms":
+                    raise ValueError("no active SMS challenge; explicit restart/login may be required")
+                code = getpass.getpass("SMS code (hidden): ")
+                result = send("sms", attempt_id=result["attempt_id"],
+                              challenge_id=result["challenge_id"], code=code)
+                del code
+                print(json.dumps(result))
+                return 0 if result.get("authenticated") else 1
         if args.command == "status":
             ok = probe(config)
             print(json.dumps({"ready": ok, "check": "VPN route + target banner"}))
@@ -67,6 +100,7 @@ def main():
         if not config.get("probe"):
             raise ValueError("configure a real banner probe before login")
         mapping = json.loads(Path(config["ui_mapping"]).read_text())
+        import fcntl
         with open("/run/univpn/login.lock", "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             username = input("VPN username: ")

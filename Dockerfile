@@ -40,10 +40,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=install /usr/local/UniVPN/serviceclient /usr/local/UniVPN/serviceclient
 COPY --from=install /usr/local/UniVPN/promote /usr/local/UniVPN/promote
 COPY --from=install /lib/libgmcrypto.so /lib/libgmcrypto.so
-COPY univpn_gateway/__init__.py univpn_gateway/cli.py univpn_gateway/config.py univpn_gateway/gateway.py univpn_gateway/profile.py univpn_gateway/runtime_cli.py /opt/gateway/univpn_gateway/
+COPY --from=install /usr/local/UniVPN/sysconfig.ini /usr/local/UniVPN/sysconfig.ini
+COPY --from=install /usr/local/UniVPN/sysconfig.ini /opt/gateway/vendor-sysconfig.ini
+COPY univpn_gateway/__init__.py univpn_gateway/cli.py univpn_gateway/config.py univpn_gateway/gateway.py univpn_gateway/profile.py univpn_gateway/runtime_cli.py univpn_gateway/native_rpc.py univpn_gateway/native_messages.py univpn_gateway/challenge.py univpn_gateway/certificate_policy.py univpn_gateway/native_control.py univpn_gateway/native_engine.py univpn_gateway/native_auth.py univpn_gateway/native_service.py /opt/gateway/univpn_gateway/
 COPY scripts/vpnctl /usr/local/bin/vpnctl
 RUN chmod 755 /usr/local/bin/vpnctl
 ENV USER=root HOME=/root PYTHONPATH=/opt/gateway VPN_BACKEND=cli \
     LD_LIBRARY_PATH=/usr/local/UniVPN/serviceclient
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD vpnctl status
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/bin/python3", "-m", "univpn_gateway.runtime_cli"]
+
+# Native CSDK terminal frontend: verified SMS MFA without graphical libraries.
+FROM cli AS native
+ENV VPN_BACKEND=native
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/bin/python3", "-m", "univpn_gateway.native_service"]

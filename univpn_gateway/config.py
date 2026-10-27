@@ -32,6 +32,15 @@ def load(path):
             raise ValueError("invalid probe port")
         if not probe.get("banner_prefix"):
             raise ValueError("probe needs a real banner_prefix, e.g. SSH-2.0-")
+    pin = data.get("approved_certificate_sha256")
+    if pin is not None and (not isinstance(pin, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", pin)):
+        raise ValueError("approved_certificate_sha256 must contain 64 hexadecimal characters")
+    for key, default in (("tunnel_mode", 2), ("gm_algorithm", 0), ("route_cover", 1)):
+        value = data.get(key, default)
+        choices = range(1, 4) if key == "tunnel_mode" else (0, 1)
+        if type(value) is not int or value not in choices:
+            raise ValueError("invalid " + key)
+        data[key] = value
     data.update(port=port, vpn_interface=interface,
                 allowed_cidrs=[str(n) for n in networks], wireguard_client=str(client))
     return data
