@@ -13,7 +13,7 @@ Windows 应用（SSH / HTTP / UDP）
 | 功能 | 状态 |
 | --- | --- |
 | 配置校验、单次短信会话状态、禁止自动重复提交 | 有单元测试；不等于真实厂商登录已通过 |
-| 按 CIDR 的双向转发/SNAT、VPN 故障时阻断 | 实验实现；待 Linux 网络集成测试 |
+| 按 CIDR 的双向转发/SNAT、普通出口回落阻断 | 独立 Linux namespace 集成测试通过；使用 veth 模拟隧道，非真实 VPN |
 | Windows WireGuard 配置 | 模板；待端到端验证 |
 | 终端输入账号密码及短信验证码 | 实验 AT-SPI 后端；尚未取得厂商实际控件映射 |
 | 无桌面、无 VNC/noVNC 镜像 | 已提供构建文件；构建及厂商运行兼容性待验证 |
@@ -77,7 +77,7 @@ docker compose exec vpn vpnctl status
 python -m unittest discover -s tests -v
 ```
 
-单元测试覆盖过期验证码、重复提交、未收到真实业务响应、证书提示、目标白名单及规则隔离；不替代真实认证与数据面验证。镜像内存上限不是实际内存消耗，Docker Desktop/WSL 的平台开销应另测。
+单元测试覆盖过期验证码、重复提交、未收到真实业务响应、证书提示、目标白名单及规则隔离；不替代真实认证与数据面验证。独立 Linux 网络测试已通过真实 TCP/HTTP/UDP、SNAT、目标阻断、普通出口回落阻断及重复启动规则检查，接口由 veth 模拟，不包含 WireGuard、UniVPN 或 Windows。Qt/AT-SPI 集成测试使用自建登录窗口，不代表厂商窗口已验证。镜像内存上限不是实际内存消耗，Docker Desktop/WSL 的平台开销应另测。
 
 架构背景见 [docs/design.md](docs/design.md)。网络、认证及资源结果将以实测记录更新；不能从程序启动或网卡存在推断 VPN 可用。
 

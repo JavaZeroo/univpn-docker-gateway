@@ -18,3 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo python3 tests/network_integration.py
+  accessibility:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-pyatspi python3-pyqt5 at-spi2-core dbus-x11 xvfb xauth
+      - run: dbus-run-session -- xvfb-run -a env QT_ACCESSIBILITY=1 QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 /usr/bin/python3 tests/accessibility_integration.py
