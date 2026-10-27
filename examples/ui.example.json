@@ -1,0 +1,12 @@
+{
+  "_notice": "Illustrative selectors ONLY. Capture real widget roles/names with inspect-ui; no tested vendor mapping is shipped yet.",
+  "open_login": [],
+  "username": {"role": "text", "name": "REPLACE_WITH_ACTUAL_USERNAME_WIDGET"},
+  "password": {"role": "password text", "name": "REPLACE_WITH_ACTUAL_PASSWORD_WIDGET"},
+  "submit": {"role": "push button", "name": "REPLACE_WITH_ACTUAL_LOGIN_BUTTON"},
+  "otp": {
+    "input": {"role": "text", "name": "REPLACE_WITH_ACTUAL_OTP_WIDGET"},
+    "submit": {"role": "push button", "name": "REPLACE_WITH_ACTUAL_OTP_CONFIRM"},
+    "timeout_seconds": 120
+  }
+}

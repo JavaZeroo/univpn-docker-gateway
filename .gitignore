@@ -1,0 +1,9 @@
+private/
+vendor/*
+!vendor/.gitkeep
+.env
+__pycache__/
+*.pyc
+.venv/
+dist/
+*.log

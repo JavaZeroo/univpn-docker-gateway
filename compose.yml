@@ -1,0 +1,29 @@
+services:
+  vpn:
+    image: univpn-docker-gateway:local
+    build:
+      context: .
+      target: terminal
+      args:
+        UNIVPN_SHA256: ${UNIVPN_SHA256:?Set the installer SHA256 in .env}
+    cap_add: [NET_ADMIN]
+    devices: [/dev/net/tun:/dev/net/tun]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    ports:
+      - "127.0.0.1:${WG_PORT:-51829}:51820/udp"
+    volumes:
+      - ./private:/config:ro
+    tmpfs:
+      - /run
+      - /tmp
+      - /root/UniVPN:mode=0700
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 128
+    restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: "1"
