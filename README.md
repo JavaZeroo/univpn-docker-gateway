@@ -18,7 +18,8 @@ Windows 应用（SSH / HTTP / UDP）
 | --- | --- |
 | 纯 Python → 官方 CSDK，无 GUI 的短信原型 | 真实 HiDev 短信认证、隧道启动和 4 台 SSH banner 通过 |
 | 正式 native 服务、配置、会话和传输控制 | 当前 114 项单元测试通过；默认 Compose 容器真实短信、隧道及 4/4 台服务器 SSH banner 通过 |
-| 按 CIDR 的双向转发/SNAT、普通出口回落阻断 | 独立 Linux namespace 集成测试通过；使用 veth 模拟隧道，非真实 VPN |
+| 按 CIDR 的双向转发/SNAT、普通出口回落阻断 | 独立 namespace 中真实 WireGuard 加模拟 VPN 集成测试通过；包含功能性普通出口回落正反对照 |
+| Linux WireGuard 客户端 → 容器 → 真实 UniVPN | 4/4 SSH、双向各 1 MiB HTTP、UDP 大包及探针失效阻断/恢复通过 |
 | Windows WireGuard → Docker → 真实 VPN 网段 | 配置模板已提供；整条链路尚待端到端验收 |
 | 旧厂商 CLI 交互菜单 | 此版本实测没有短信续交流程；不再是默认 Compose 后端 |
 | 早期 Qt 控件终端交互实验 | 仅保留研究代码，不在默认路径执行 |
@@ -85,13 +86,34 @@ docker compose exec vpn vpnctl login
 
 ## 网段转发实验
 
-这部分 Windows 到真实 VPN 的整条链路仍待验收。认证和实际目标探针通过后，再配置接入链路：
+Linux WireGuard 客户端经网关到真实 VPN 已完成协议测试；Windows 到真实 VPN 的整条链路仍待验收。认证和实际目标探针通过后，再配置接入链路：
 
 1. 本地分别生成 Windows 和容器 WireGuard 密钥。可使用本机 WireGuard 的 `wg genkey` / `wg pubkey`。不要提交私钥。
 2. 参考 `examples/wg0.conf` 写入 `private/wg0.conf`，容器 peer AllowedIPs 只允许 Windows 接入 `/32`。
 3. 新建 Windows WireGuard 配置，参考 `examples/windows.conf`，AllowedIPs 填所需目标网段；与 vpn.json 一致。接入地址必须与现有局域网、VPN、Docker 网络无冲突。
-4. 重建此测试容器，导入并启用**新的** Windows tunnel。现有其他 VPN、Mihomo、WireGuard tunnel 保留。
+4. 服务启动时会读取 `wg0.conf`。若当前 VPN 已认证、目标配置没有改变，也可以热加载下面的 WireGuard 配置，无需重启短信会话。已有 `wg0` 时不要重复执行。
 5. 验证真实 IP 的 SSH、HTTP、UDP、大文件，确认路由、MTU，以及断开 UniVPN 后无绕行。未完成这些测试前，不移除原有 SSH 入口。
+
+```powershell
+docker compose exec vpn sh -c 'install -m 600 /config/wg0.conf /run/univpn/wg0.conf && wg-quick up /run/univpn/wg0.conf'
+```
+
+`scripts/windows-gateway.ps1` 默认只生成脱敏、只读计划。它核对客户端地址、目标 CIDR 和 `vpn.json` 一致，拒绝默认路由、DNS 改动及脚本 hooks，并检查官方 WireGuard 程序签名。配置文件名必须是独立的 `univpn-*.conf`。示例文件需要替换密钥，私钥文件只应允许自己、SYSTEM 和管理员读取。
+
+```powershell
+# 只读预检；实际目录和 UDP 端口以本地 Compose 设置为准。
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-gateway.ps1 -TunnelConfig private/univpn-lab.conf -GatewayConfig private/vpn.json -Endpoint 127.0.0.1:51829
+
+# 创建并启动独立的 Windows tunnel。系统会要求一次管理员确认。
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-gateway.ps1 -Mode Install -TunnelConfig private/univpn-lab.conf -GatewayConfig private/vpn.json -Endpoint 127.0.0.1:51829 -Elevate
+
+# 回滚只移除这一条命名的 tunnel；无需读取私钥文件。
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-gateway.ps1 -Mode Uninstall -TunnelConfig private/univpn-lab.conf -Elevate
+```
+
+`ExecutionPolicy Bypass` 仅作用于本次脚本进程，不修改持久策略。脚本拒绝覆盖已有同名服务，也不批量停止其他 VPN。安装命令成功不等于数据面通过；必须继续核对目标的最佳路由、WireGuard 握手/收发计数、容器出口，以及实际业务响应。旧 Windows VPN 仍在线时，服务停用后的访问成功可能来自旧路由，不能当作新链路证据。
+
+本次真实 UniVPN 接口 MTU 为 1300；显式使用 WireGuard MTU 1280，通过 1 MiB 双向 HTTP 和 UDP 分片测试。这是本次路径的可用值，其他路径仍需测量。首版不修改 DNS；内网域名分流需另行设计。
 
 多个实例用不同 Compose project、UDP 端口、接入地址和密钥。目标网段重叠需要另行设计地址映射，当前不支持同时区分重叠目的地址。首版只处理 IPv4 和直接 IP，不提供内网条件 DNS。
 
@@ -105,9 +127,11 @@ python -m unittest discover -s tests -v
 
 当前 114 项单元测试覆盖原生传输分帧、同引擎短信续交、超时/取消/禁止重复提交、证书策略、认证与健康状态分离，以及配置和规则生成。它们使用模拟对象；正式容器的真实短信、隧道和 4/4 台服务器 SSH banner 另行完成实测，不能由单元测试替代。
 
-独立 Linux 网络测试已通过真实 TCP/HTTP/UDP、SNAT、目标阻断、普通出口回落阻断及重复启动规则检查，接口由 veth 模拟，不包含 WireGuard、UniVPN 或 Windows。历史 Qt/AT-SPI 集成测试使用自建登录窗口，不属于默认 native 后端的认证证据。镜像内存上限不是实际内存消耗，Docker Desktop/WSL 的平台开销应另测。
+`tests/network_integration.py` 以 veth 模拟两段隧道；新增 `tests/wireguard_integration.py` 使用真实 kernel WireGuard，VPN 侧仍由 veth 模拟。两者都在独立命名空间测试，不能在正式 VPN namespace 中执行。后者另验 1 MiB 下载摘要、WireGuard 实际握手/收发，以及先证明普通出口可用、再证明它被规则阻断。Windows 辅助脚本另有 16 项模拟检查，不会触发 UAC 或改动系统。
 
-架构背景见 [docs/design.md](docs/design.md)。网络、认证及资源结果将以实测记录更新；不能从程序启动或网卡存在推断 VPN 可用。
+真实 VPN 的 SSH、HTTP、UDP 和健康门控另行实测；模拟探针失败没有断开厂商会话，不能代替真实断线重连验收。历史 Qt/AT-SPI 集成测试使用自建登录窗口，不属于默认 native 后端的认证证据。镜像内存上限不是实际内存消耗，Docker Desktop/WSL 的平台开销应另测。
+
+架构背景见 [docs/design.md](docs/design.md)，Windows 执行条件见 [网关研究](docs/windows-gateway-research.md)，本轮证据见 [网段网关验证](docs/subnet-gateway-validation.md)。不能从程序启动或网卡存在推断 VPN 可用。
 
 ## 来源与许可
 
