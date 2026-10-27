@@ -16,6 +16,7 @@ Windows 应用（SSH / HTTP / UDP）
 | 按 CIDR 的双向转发/SNAT、普通出口回落阻断 | 独立 Linux namespace 集成测试通过；使用 veth 模拟隧道，非真实 VPN |
 | Windows WireGuard 配置 | 模板；待端到端验证 |
 | 终端输入账号密码及短信验证码 | 实验 AT-SPI 后端；尚未取得厂商实际控件映射 |
+| Qt 控件的终端交互 | 自建 Qt 窗口的 DBus/AT-SPI 集成测试通过；非厂商真实登录 |
 | 无桌面、无 VNC/noVNC 镜像 | 已提供构建文件；构建及厂商运行兼容性待验证 |
 | 原生无图形 UniVPNCS 的短信认证 | 未支持；厂商手册明确说明 Linux CLI 的 SSL VPN 仅支持用户名/密码 |
 
