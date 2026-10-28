@@ -4,7 +4,7 @@
 
 **默认 Compose 现使用纯 Python 终端前端 + 官方 UniVPNCS 的 CSDK/RPC 后端**，不安装或运行 Qt、X11、Xvfb、DBus、VNC/noVNC。无图形原型已完成一次真实 HiDev 短信认证、启动 VPN 隧道，并收到 4 台内网服务器的真实 SSH banner。
 
-正式 native 服务模块已通过单元测试。默认 Compose 容器也已完成真实短信认证、隧道启动和 **4/4 台服务器的 SSH banner** 验证，状态中的 `authenticated`、`tunnel_started`、`data_plane_ready` 均为 `true`。**Windows 指定新接口的完整传输已通过，普通应用默认选路仍需修正同前缀路由竞争**。详见 [原生后端研究](docs/native-rpc-research.md)、[验证记录](docs/validation.md) 和 [网段网关实测](docs/subnet-gateway-validation.md)。
+正式 native 服务模块已通过单元测试。默认 Compose 容器也已完成真实短信认证、隧道启动和 **4/4 台服务器的 SSH banner** 验证，状态中的 `authenticated`、`tunnel_started`、`data_plane_ready` 均为 `true`。**Windows 普通连接经默认选路到 Docker/真实 UniVPN 已通过：4/4 SSH、双向 1 MiB HTTP、UDP 及探针失败阻断/恢复。** 当前仅配置四个精确目标 `/32`，没有接管整个公网地址段。详见 [原生后端研究](docs/native-rpc-research.md)、[验证记录](docs/validation.md) 和 [网段网关实测](docs/subnet-gateway-validation.md)。
 
 ```text
 Windows 应用（SSH / HTTP / UDP）
@@ -20,7 +20,7 @@ Windows 应用（SSH / HTTP / UDP）
 | 正式 native 服务、配置、会话和传输控制 | 单元测试通过；默认 Compose 容器真实短信、隧道及 4/4 台服务器 SSH banner 通过 |
 | 按 CIDR 的双向转发/SNAT、普通出口回落阻断 | 独立 namespace 中真实 WireGuard 加模拟 VPN 集成测试通过；包含功能性普通出口回落正反对照 |
 | Linux WireGuard 客户端 → 容器 → 真实 UniVPN | 4/4 SSH、双向各 1 MiB HTTP、UDP 大包及探针失效阻断/恢复通过 |
-| Windows WireGuard → localhost UDP → Docker → 真实 UniVPN | 指定新接口的 4/4 SSH、双向 1 MiB HTTP、UDP 及探针失效阻断/恢复通过；默认选路修正待验收 |
+| Windows WireGuard → localhost UDP → Docker → 真实 UniVPN | 默认选路下的普通 socket 已通过 4/4 SSH、双向 1 MiB HTTP、UDP 及探针失效阻断/恢复 |
 | 旧厂商 CLI 交互菜单 | 此版本实测没有短信续交流程；不再是默认 Compose 后端 |
 | 早期 Qt 控件终端交互实验 | 仅保留研究代码，不在默认路径执行 |
 
@@ -88,7 +88,7 @@ docker compose exec vpn vpnctl login
 
 ## 网段转发实验
 
-Linux WireGuard 客户端及 Windows 指定新接口经网关到真实 VPN 已完成协议测试；普通应用默认选路还要解决旧 VPN 的同前缀竞争。认证和实际目标探针通过后，再配置接入链路：
+Linux 和 Windows 到真实 VPN 均已完成协议测试。Windows 的同前缀路由竞争已通过仅调整新接口优先级解决，并以不绑定接口或源地址的普通 socket 验证。认证和实际目标探针通过后，再配置接入链路：
 
 1. 本地分别生成 Windows 和容器 WireGuard 密钥。可使用本机 WireGuard 的 `wg genkey` / `wg pubkey`。不要提交私钥。
 2. 参考 `examples/wg0.conf` 写入 `private/wg0.conf`，容器 peer AllowedIPs 只允许 Windows 接入 `/32`。

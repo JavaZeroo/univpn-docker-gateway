@@ -1,6 +1,6 @@
 # Windows 网段网关接入：机制、实测与执行边界
 
-2026-10-28。本文件记录官方机制及本机准备、安装和选路冲突；实际实验见[网段网关验证](subnet-gateway-validation.md)。Windows 指定接口到真实 VPN 已通过，普通应用的默认选路仍需修正。
+更新至 2026-10-29。本文件记录官方机制及本机准备、安装和选路冲突；实际实验见[网段网关验证](subnet-gateway-validation.md)。Windows 指定接口及普通默认连接到真实 VPN 均已通过，范围为四个已配置目标 `/32`。
 
 ## 现在可准备什么
 
@@ -40,7 +40,7 @@ Set-Service -Name 'WireGuardTunnel$univpn-hidev' -StartupType Manual
 
 WireGuard Windows 会从 AllowedIPs 创建路由；Windows 优先最长匹配，因此业务 `/32` 可覆盖旧 VPN 的宽路由。先检查同长度路由和地址冲突，不删除旧路由、不调整全局 metric。管理器启动 tunnel 时可能停止地址或路由相交的其他 WireGuard tunnel，故新旧配置应先核对不重叠。[WireGuard 路由行为](https://git.zx2c4.com/wireguard-windows/about/docs/netquirk.md)、[Microsoft 路由选择](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-tcpip-interfaces-interface-routes-route-metric)、[管理器实现](https://git.zx2c4.com/wireguard-windows/tree/manager/ipc_server.go)
 
-本轮安装后实际出现旧 VPN 和新 WG 都有 `/32` 的情况，route metric 同为 0，但旧接口 metric=1、新 WG 自动 metric=5，`Find-NetRoute` 仍选旧接口。最长前缀相同时还需比较 route + interface metric。WireGuard Windows 1.1.1 自身在默认路由场景使用 interface metric=0，证明 0 是受支持值；本轮拟仅将新 WG 改为 0，以优先于旧接口的 1。[Microsoft interface metric](https://learn.microsoft.com/en-us/powershell/module/nettcpip/set-netipinterface#-interfacemetric)、[WireGuard 1.1.1 接口配置](https://git.zx2c4.com/wireguard-windows/plain/tunnel/addressconfig.go?h=v1.1.1)
+本轮安装后实际出现旧 VPN 和新 WG 都有 `/32` 的情况，route metric 同为 0，但旧接口 metric=1、新 WG 自动 metric=5，`Find-NetRoute` 仍选旧接口。最长前缀相同时还需比较 route + interface metric。WireGuard Windows 1.1.1 自身在默认路由场景使用 interface metric=0，证明 0 是受支持值；用户随后仅将新 WG 改为 0，四个目标已实测优先选择新接口，普通 SSH/HTTP/UDP 也通过。[Microsoft interface metric](https://learn.microsoft.com/en-us/powershell/module/nettcpip/set-netipinterface#-interfacemetric)、[WireGuard 1.1.1 接口配置](https://git.zx2c4.com/wireguard-windows/plain/tunnel/addressconfig.go?h=v1.1.1)
 
 ```powershell
 # 管理员执行：只改本次新建的接口，随后重新查询每个目标的 Find-NetRoute。
@@ -50,6 +50,8 @@ Set-NetIPInterface -InterfaceAlias 'univpn-hidev' -AddressFamily IPv4 -Automatic
 ```
 
 ActiveStore 表示当前活动配置，不应承诺跨重启持久。非默认路由的 WG 配置不会主动把自动 metric 改回 true，但服务停止/启动会关闭和重建网卡；必须另外验证重启后的实际值，不能固定缓存接口编号。[Microsoft PolicyStore](https://learn.microsoft.com/en-us/powershell/module/nettcpip/set-netipinterface#-policystore)、[WG 服务生命周期](https://git.zx2c4.com/wireguard-windows/plain/tunnel/service.go?h=v1.1.1)
+
+本机 metric=0 时，`Get-NetIPInterface` 及直接 CIM 属性均显示 null，但只读 `netsh.exe interface ipv4 show interfaces interface=univpn-hidev level=verbose store=active` 明确返回 metric 0、自动 metric disabled。此次零值有独立读数与实际最佳路由佐证，不能把任何缺失值都当作零。
 
 只读预检及启用后的复核命令：
 

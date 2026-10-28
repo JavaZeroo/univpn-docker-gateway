@@ -1,8 +1,8 @@
-# 网段网关验证（2026-10-28）
+# 网段网关验证（2026-10-28 至 2026-10-29）
 
 ## 验收范围
 
-本轮已验证 Linux WireGuard 客户端及 Windows 指定接口连接 → Docker 网关 → 真实 UniVPN → HiDev。Windows 新服务已安装，localhost UDP 发布路径和真实业务已通过；普通应用的默认选路仍需解决同前缀路由竞争。正式 UniVPN 会话未重启，也没有重新发送短信。
+本轮已验证 Linux WireGuard 客户端及 Windows 普通连接 → Docker 网关 → 真实 UniVPN → HiDev。Windows 新服务已安装，同前缀选路竞争已解决；localhost UDP 发布路径、默认选路和真实业务均已通过。正式 UniVPN 会话未重启，也没有重新发送短信。当前范围仅为已配置的四个目标 `/32`。
 
 真实目标地址、网关凭据、密钥和短信内容仅保留在本地忽略目录中；下文仅记录实验方法和结果。
 
@@ -64,7 +64,24 @@
 | 远端来源 | 正式容器 UniVPN 地址 |
 | 探针失败/恢复 | Windows 指定接口的 SSH、HTTP、UDP 全部阻断，恢复后全部通过；未重新认证 |
 
-这一步覆盖真实 Windows 网络栈和 localhost UDP 发布路径，但不能证明所有普通应用已默认切换。最小修正是仅对新网卡设置 IPv4 interface metric=0、关闭自动 metric，再逐个核对最佳路由并使用未绑定接口的普通 socket 重测。当前自动化进程对该设置实测收到 Access denied，需要管理员执行；实际设置与默认选路结果另行记录。
+这一步覆盖真实 Windows 网络栈和 localhost UDP 发布路径，但还不能证明普通连接已默认切换。随后由用户在管理员窗口仅将新网卡设为 IPv4 ActiveStore metric=0、关闭自动 metric；自动化进程自身仍未提权，没有修改其他网卡。
+
+### 2026-10-29：普通 Windows 默认选路验收
+
+四个目标的 `Find-NetRoute` 均命中 `univpn-hidev` 及其精确 `/32`。本机 CIM 对 metric=0 呈现为 null，因此另用只读 `netsh interface ipv4 show interfaces interface=univpn-hidev level=verbose store=active` 独立确认 `Metric: 0`、`Use Automatic Metric: disabled`、MTU=1280；不能将其他场景的 null 一律当作零。
+
+本轮移除测试中的 `IP_UNICAST_IF` 和源地址绑定，使用默认 `socket.create_connection`、`http.client` 与普通 UDP socket，未使用 HTTP/SOCKS 代理：
+
+| 普通 Windows 默认连接 | 结果 |
+| --- | --- |
+| SSH banner | 4/4 正常，系统自动选择 WireGuard 源地址 |
+| HTTP 下载、上传 | 各 1,048,576 字节，长度与摘要匹配 |
+| UDP echo | 32、1200、4096 字节测试内容及前缀均正确返回 |
+| 真实路径 | 四个最佳路由均为新接口；容器 WireGuard 有近期握手及双向传输增长；远端看到正式容器 UniVPN 地址 |
+| 探针失败 | 普通 SSH、HTTP、UDP 全部失败，没有经仍在线的旧 Windows VPN 返回响应 |
+| 探针恢复 | 所有测试再次通过；四条最佳路由仍为新接口，无需新验证码 |
+
+这证明已配置四个原始目标 IP 的多协议默认访问，不需要逐服务映射 localhost 端口。应用显式指定代理的行为不由这次普通 socket 测试覆盖，临时远端测试服务在结束后清理。
 
 Windows 服务重启、系统重启后是否保留接口优先级尚未验收。DNS 分流、其他 VPN 的重叠目的地、真实厂商断线重连和 Docker 重启恢复也仍未验收。
 
