@@ -9,24 +9,57 @@ $script:ServiceExists = $false
 $script:RouteAvailable = $true
 function Test-UVPNAdministrator { return $script:Admin }
 function Get-UVPNExistingService($Name) {
-    if ($script:ServiceExists) { return [pscustomobject]@{Name=$Name;Status='Running'} }
+    if ($script:ServiceExists -or ($script:InstallLaunched -and $script:ServiceReady)) {
+        return [pscustomobject]@{Name=$Name;Status='Running'}
+    }
     return $null
+}
+function Get-UVPNAdapters {
+    [pscustomobject]@{Name='huawei-new';InterfaceDescription='WireGuard Tunnel';ifIndex=17;
+        InterfaceGuid='11111111-1111-1111-1111-111111111111';Status='Up'}
+    if ($script:AdapterAlreadyExists) {
+        [pscustomobject]@{Name='UNIVPN-test';InterfaceDescription='WireGuard Tunnel';ifIndex=99;
+            InterfaceGuid='22222222-2222-2222-2222-222222222222';Status='Up'}
+    } elseif ($script:InstallLaunched -and $script:AdapterReady) {
+        [pscustomobject]@{Name='univpn-test';InterfaceDescription=$script:AdapterDescription;ifIndex=99;
+            InterfaceGuid=if ($script:ReusedIdentity) {'11111111-1111-1111-1111-111111111111'}
+                          else {'33333333-3333-3333-3333-333333333333'};Status='Up'}
+    }
+}
+function Get-UVPNClockMilliseconds { return $script:ClockTick }
+function Start-Sleep { param($Milliseconds) $script:ClockTick += $Milliseconds }
+function Set-NetIPInterface {
+    param($InterfaceIndex,$AddressFamily,$AutomaticMetric,$InterfaceMetric,$PolicyStore,$ErrorAction)
+    $script:MetricCalls += [pscustomobject]@{InterfaceIndex=$InterfaceIndex;AddressFamily=$AddressFamily;
+        AutomaticMetric=$AutomaticMetric;InterfaceMetric=$InterfaceMetric;PolicyStore=$PolicyStore}
+    $script:MetricSet = $true
+}
+function Get-NetIPInterface {
+    param($InterfaceIndex,$AddressFamily,$PolicyStore,$ErrorAction)
+    [pscustomobject]@{InterfaceIndex=$InterfaceIndex;AutomaticMetric='Disabled';InterfaceMetric=0}
 }
 function Get-UVPNOfficialExecutable($Path) { return 'C:\Program Files\WireGuard\wireguard.exe' }
 function Get-UVPNTargetRoutes($Destinations) {
     foreach ($target in $Destinations) {
+        $selected = $script:MetricSet -and $script:NewRouteSelected
         [pscustomobject]@{Target=$target;Status=if ($script:RouteAvailable) {'Resolved'} else {'Unavailable'};
-            InterfaceAlias='existing-vpn';InterfaceIndex=17;DestinationPrefix='10.80.0.0/24';NextHop='0.0.0.0';RouteMetric=10}
+            InterfaceAlias=if ($selected) {'univpn-test'} else {'existing-vpn'};
+            InterfaceIndex=if ($selected) {99} else {17};DestinationPrefix=$target;NextHop='0.0.0.0';RouteMetric=0}
     }
 }
 function Start-Process {
     param($FilePath,$ArgumentList,$WindowStyle,[switch]$Wait,[switch]$PassThru,$Verb,$ErrorAction)
     $script:NativeCalls += [pscustomobject]@{FilePath=$FilePath;Arguments=@($ArgumentList);Verb=$Verb;WindowStyle=$WindowStyle}
+    if ($ArgumentList[0] -eq '/installtunnelservice') { $script:InstallLaunched = $true }
     return [pscustomobject]@{ExitCode=0}
 }
 function Assert($Condition, $Message) { if (-not $Condition) { throw ('Assertion: ' + $Message) } }
 function Check($Name, [scriptblock]$Body) {
     $script:NativeCalls = @(); $script:Admin = $false; $script:ServiceExists = $false; $script:RouteAvailable = $true
+    $script:MetricCalls = @(); $script:MetricSet = $false; $script:InstallLaunched = $false
+    $script:ServiceReady = $true; $script:AdapterReady = $true; $script:AdapterAlreadyExists = $false
+    $script:AdapterDescription = 'WireGuard Tunnel'; $script:ReusedIdentity = $false
+    $script:NewRouteSelected = $true; $script:ClockTick = 0
     & $Body
     $script:Passed += 1
     Write-Output ('PASS ' + $Name)
@@ -36,6 +69,14 @@ function Reject([scriptblock]$Body) {
     try { & $Body | Out-Null } catch { $caught = $true }
     Assert $caught 'invalid operation was accepted'
     Assert ($script:NativeCalls.Count -eq 0) 'a rejected operation invoked a process'
+    Assert ($script:MetricCalls.Count -eq 0) 'a rejected operation changed an interface'
+}
+function Reject-Partial([scriptblock]$Body) {
+    $message = $null
+    try { & $Body | Out-Null } catch { $message = $_.Exception.Message }
+    Assert ($message -and $message.Contains('Installation may have completed, but routing is not ready')) 'partial installation was not explained'
+    Assert ($script:NativeCalls.Count -eq 1) 'partial failure invoked an extra process or rollback'
+    Assert (@($script:MetricCalls | Where-Object InterfaceIndex -ne 99).Count -eq 0) 'another adapter was modified'
 }
 
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('uvpn-windows-test-' + [Guid]::NewGuid().ToString('N'))
@@ -71,7 +112,9 @@ try {
         $plan = Invoke-Case
         Assert ($plan.Mode -eq 'Plan' -and -not $plan.Administrator) 'plan did not work without admin'
         Assert ($plan.CurrentBestRoutes.Count -eq 2) 'target routes missing'
+        Assert ($plan.ExpectedIPv4InterfaceMetric -eq 0 -and $plan.MetricPolicyStore -eq 'ActiveStore') 'expected priority absent'
         Assert ($script:NativeCalls.Count -eq 0) 'plan invoked a process'
+        Assert ($script:MetricCalls.Count -eq 0) 'plan changed an interface'
         $serialized = $plan | ConvertTo-Json -Depth 5
         Assert (-not $serialized.Contains($private) -and -not $serialized.Contains($public)) 'plan exposed keys'
         Assert ([IO.File]::ReadAllText($script:ConfigPath) -ceq $before) 'plan changed config'
@@ -122,6 +165,11 @@ try {
         Assert (Invoke-Case).ServiceExists 'existing service missing from plan'
         Reject { Invoke-Case Install }
     }
+    Check 'orphan pre-existing adapter name is rejected even with different case' {
+        Put-Config; $script:AdapterAlreadyExists = $true; $script:Admin = $true
+        Assert (Invoke-Case).AdapterExists 'existing adapter missing from plan'
+        Reject { Invoke-Case Install }
+    }
     Check 'install and uninstall refuse non-admin without explicit elevation' {
         Put-Config
         Reject { Invoke-Case Install }
@@ -130,17 +178,51 @@ try {
     Check 'install only invokes dedicated service with config path' {
         Put-Config; $script:Admin = $true
         $result = Invoke-Case Install
-        Assert ($result.Status -eq 'InstallCommandSucceeded') 'install command failed'
+        Assert ($result.Status -eq 'InstalledAndRoutesVerified' -and $result.RouteReady) 'install and route verification failed'
         Assert ($script:NativeCalls.Count -eq 1) 'unexpected process count'
         Assert ($script:NativeCalls[0].Arguments[0] -eq '/installtunnelservice') 'wrong command'
         Assert ($script:NativeCalls[0].Arguments[1].Contains('univpn-test.conf')) 'wrong config path'
         Assert (-not ($script:NativeCalls | ConvertTo-Json -Depth 4).Contains($private)) 'key in process arguments'
+        Assert ($script:MetricCalls.Count -eq 1) 'unexpected metric operation count'
+        $metric = $script:MetricCalls[0]
+        Assert ($metric.InterfaceIndex -eq 99 -and $metric.AddressFamily -eq 'IPv4') 'wrong interface selected'
+        Assert ($metric.AutomaticMetric -eq 'Disabled' -and $metric.InterfaceMetric -eq 0 -and
+            $metric.PolicyStore -eq 'ActiveStore') 'wrong priority settings'
+        Assert (@($result.CurrentBestRoutes | Where-Object InterfaceIndex -ne 99).Count -eq 0) 'target did not select new interface'
+    }
+    Check 'readiness timeout never changes an old adapter' {
+        Put-Config; $script:Admin = $true; $script:ServiceReady = $false
+        Reject-Partial { Invoke-Case Install }
+        Assert ($script:MetricCalls.Count -eq 0) 'timeout changed an interface'
+        Assert ($script:ClockTick -le 10000) 'readiness exceeded its bounded wait'
+    }
+    Check 'a missing new adapter times out without metric changes' {
+        Put-Config; $script:Admin = $true; $script:AdapterReady = $false
+        Reject-Partial { Invoke-Case Install }
+        Assert ($script:MetricCalls.Count -eq 0) 'missing adapter changed an interface'
+    }
+    Check 'wrong adapter type and reused old GUID are rejected before mutation' {
+        Put-Config; $script:Admin = $true; $script:AdapterDescription = 'Existing VPN TAP'
+        Reject-Partial { Invoke-Case Install }
+        Assert ($script:MetricCalls.Count -eq 0) 'non-WireGuard interface changed'
+        $script:NativeCalls = @(); $script:InstallLaunched = $false
+        $script:AdapterDescription = 'WireGuard Tunnel'; $script:ReusedIdentity = $true
+        Reject-Partial { Invoke-Case Install }
+        Assert ($script:MetricCalls.Count -eq 0) 'pre-existing adapter identity changed'
+    }
+    Check 'successful install but old best route is a partial failure' {
+        Put-Config; $script:Admin = $true; $script:NewRouteSelected = $false
+        Reject-Partial { Invoke-Case Install -ResultPath $script:ResultFile }
+        $record = [IO.File]::ReadAllText($script:ResultFile) | ConvertFrom-Json
+        Assert ($record.Status -eq 'InstallationMayExistButRoutesNotReady') 'result falsely declared full success'
+        Assert ($script:MetricCalls.Count -eq 1 -and $script:MetricCalls[0].InterfaceIndex -eq 99) 'wrong metric changes'
     }
     Check 'uninstall can only remove its own prefixed basename' {
         $script:Admin = $true; $script:ServiceExists = $true
         $result = Invoke-UVPNGateway -Mode Uninstall -TunnelConfig (Join-Path $temp 'univpn-test.conf')
         Assert ($script:NativeCalls[0].Arguments[0] -eq '/uninstalltunnelservice') 'wrong removal command'
         Assert ($script:NativeCalls[0].Arguments[1] -ceq 'univpn-test') 'wrong service removed'
+        Assert ($script:MetricCalls.Count -eq 0) 'uninstall changed adapter metrics'
         $script:NativeCalls = @()
         foreach ($name in @('huawei-new.conf','mihomo.conf','UniVPN.conf','univpn-.conf','univpn-test.conf.dpapi')) {
             Reject { Invoke-UVPNGateway -Mode Uninstall -TunnelConfig (Join-Path $temp $name) }

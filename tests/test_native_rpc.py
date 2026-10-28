@@ -239,7 +239,8 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(1, endpoint.connects)
         self.assertEqual(2, endpoint.sends)  # One initialization, one request.
         self.assertGreater(endpoint.timeout, 0)
-        self.assertLessEqual(endpoint.timeout, 0.05)
+        # Absolute monotonic deadline arithmetic can add sub-nanosecond roundoff.
+        self.assertLessEqual(endpoint.timeout, 0.05 + 1e-9)
         self.assertTrue(endpoint.closed)
         self.assertNotIn("secret-test-only", str(error.exception))
 

@@ -2,7 +2,7 @@
 
 ## 验收范围
 
-本轮已验证 Linux WireGuard 客户端 → Docker 网关 → 真实 UniVPN → HiDev。Windows 入口仍待管理员安装与端到端验证。正式 UniVPN 会话未重启，也没有重新发送短信。
+本轮已验证 Linux WireGuard 客户端及 Windows 指定接口连接 → Docker 网关 → 真实 UniVPN → HiDev。Windows 新服务已安装，localhost UDP 发布路径和真实业务已通过；普通应用的默认选路仍需解决同前缀路由竞争。正式 UniVPN 会话未重启，也没有重新发送短信。
 
 真实目标地址、网关凭据、密钥和短信内容仅保留在本地忽略目录中；下文仅记录实验方法和结果。
 
@@ -47,10 +47,33 @@
 
 测试脚本使用限时预算及 finally 清理命名空间、子进程，私钥通过 0600 临时文件及 stdin 传递，不输出。运行需要 root、WireGuard 内核支持及网络命名空间权限；只能放在专用一次性测试环境，不能针对正式 VPN namespace 运行。
 
-## Windows 边界
+## Windows 独立验收与选路竞争
 
-当前独立客户端配置、只读计划、安装与专属回滚脚本已准备。Windows PowerShell 5.1 和 PowerShell 7 的 16 项模拟检查通过，未在测试中安装服务。
+用户在管理员 PowerShell 执行安装后，`WireGuardTunnel$univpn-hidev` 为 Running，网卡 Up、地址为 `10.203.0.2/32`、MTU=1280；原有另一个 WireGuard 服务仍 Running。仅有这些状态不能证明默认业务流量使用新入口。
 
-Windows 真实验收需管理员创建命名的 WireGuard 服务，并同时核对：四条 `/32` 最佳路由命中新网卡、真实 UDP/WireGuard 握手、容器 WireGuard 和 UniVPN 转发计数、远端看到容器 VPN 源地址，以及 HTTP/UDP/大包的真实响应。现有 Windows VPN 仍可提供旧路径，因此“SSH 能连上”本身不能作为新入口的成功证据。
+安装后读到同一目标的两条 `/32`，route metric 都为 0：原 VPN 网卡的 interface metric=1，新 WireGuard 自动 metric=5。`Find-NetRoute` 确认普通连接仍选择原 VPN，不能把直接 SSH 成功当作新入口通过。
 
-Windows 结果确认前，保留现有访问方式。DNS 分流、多个 VPN 的重叠目标网段、真实断线重连和 Docker 重启恢复仍未验收。
+先在 Windows 测试 socket 设置 `IP_UNICAST_IF` 为实时查询的新接口编号，并绑定其源地址，绕开默认选路歧义，仅影响测试连接：
+
+| Windows 指定接口测试 | 结果 |
+| --- | --- |
+| SSH banner | 4/4 正常 |
+| HTTP 下载、上传 | 各 1,048,576 字节，长度与摘要正确 |
+| UDP echo | 32、1200、4096 字节测试内容均正确返回 |
+| 真实入口 | Windows → `127.0.0.1:51829/udp` → Docker WireGuard；握手有效，双向计数增长超过传输数据量 |
+| 远端来源 | 正式容器 UniVPN 地址 |
+| 探针失败/恢复 | Windows 指定接口的 SSH、HTTP、UDP 全部阻断，恢复后全部通过；未重新认证 |
+
+这一步覆盖真实 Windows 网络栈和 localhost UDP 发布路径，但不能证明所有普通应用已默认切换。最小修正是仅对新网卡设置 IPv4 interface metric=0、关闭自动 metric，再逐个核对最佳路由并使用未绑定接口的普通 socket 重测。当前自动化进程对该设置实测收到 Access denied，需要管理员执行；实际设置与默认选路结果另行记录。
+
+Windows 服务重启、系统重启后是否保留接口优先级尚未验收。DNS 分流、其他 VPN 的重叠目的地、真实厂商断线重连和 Docker 重启恢复也仍未验收。
+
+## 安装器和健康探测的回归修复
+
+安装器原版仅创建服务，不能仅凭这一结果判断普通应用已改走新链路。修正版只接受安装前不存在、本次新建且身份确认的 WireGuard 网卡；设置该接口的 IPv4 ActiveStore metric=0 后，读回设置并逐目标检查最佳选路。已有同名服务或网卡不自动覆盖，部分失败明确报告“可能已安装但选路未就绪”。Windows PowerShell 5.1/7 的 21 项模拟检查通过；本轮已存在服务仍由单独的管理员命令调整，不伪称重新执行过修正版的完整安装。
+
+同时在受控内存测试中复现健康检查竞争：状态请求先占用探针锁，后台将“探针正忙”返回的 false 当作失败，触发不必要的 disable/enable。原 dispatcher 在重复强制并发中 20/20 复现，期间实际探针始终返回成功。该重配会清零规则计数，但不能据此认定本机每次计数归零都由同一竞争造成。
+
+源码修复让状态请求只读已完成的探针结果，由后台独占主动探测。新增 6 项真实 dispatcher/守卫 call-site 回归测试，涵盖并发状态查询、真实探针失败、探针期间引擎死亡及原认证命令分发；旧 dispatcher 对照会触发回归失败。全量 Python 单元测试共 120 项通过。
+
+状态因此存在后台轮询及探针超时带来的更新延迟。真实失败仍会阻断，接口出口限制继续阻止普通 eth0 回落。**当前已连接的旧容器尚未替换，此源码修复还未在该会话中生效**；应用新镜像需要维护窗口重建容器并重新认证。

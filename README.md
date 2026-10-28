@@ -4,7 +4,7 @@
 
 **默认 Compose 现使用纯 Python 终端前端 + 官方 UniVPNCS 的 CSDK/RPC 后端**，不安装或运行 Qt、X11、Xvfb、DBus、VNC/noVNC。无图形原型已完成一次真实 HiDev 短信认证、启动 VPN 隧道，并收到 4 台内网服务器的真实 SSH banner。
 
-正式 native 服务模块当前 **114 项单元测试通过**。默认 Compose 容器也已完成真实短信认证、隧道启动和 **4/4 台服务器的 SSH banner** 验证，状态中的 `authenticated`、`tunnel_started`、`data_plane_ready` 均为 `true`。**Windows WireGuard 网段接入仍待端到端实测**。详见 [原生后端研究](docs/native-rpc-research.md) 和 [验证记录](docs/validation.md)。
+正式 native 服务模块已通过单元测试。默认 Compose 容器也已完成真实短信认证、隧道启动和 **4/4 台服务器的 SSH banner** 验证，状态中的 `authenticated`、`tunnel_started`、`data_plane_ready` 均为 `true`。**Windows 指定新接口的完整传输已通过，普通应用默认选路仍需修正同前缀路由竞争**。详见 [原生后端研究](docs/native-rpc-research.md)、[验证记录](docs/validation.md) 和 [网段网关实测](docs/subnet-gateway-validation.md)。
 
 ```text
 Windows 应用（SSH / HTTP / UDP）
@@ -17,10 +17,10 @@ Windows 应用（SSH / HTTP / UDP）
 | 功能 | 状态 |
 | --- | --- |
 | 纯 Python → 官方 CSDK，无 GUI 的短信原型 | 真实 HiDev 短信认证、隧道启动和 4 台 SSH banner 通过 |
-| 正式 native 服务、配置、会话和传输控制 | 当前 114 项单元测试通过；默认 Compose 容器真实短信、隧道及 4/4 台服务器 SSH banner 通过 |
+| 正式 native 服务、配置、会话和传输控制 | 单元测试通过；默认 Compose 容器真实短信、隧道及 4/4 台服务器 SSH banner 通过 |
 | 按 CIDR 的双向转发/SNAT、普通出口回落阻断 | 独立 namespace 中真实 WireGuard 加模拟 VPN 集成测试通过；包含功能性普通出口回落正反对照 |
 | Linux WireGuard 客户端 → 容器 → 真实 UniVPN | 4/4 SSH、双向各 1 MiB HTTP、UDP 大包及探针失效阻断/恢复通过 |
-| Windows WireGuard → Docker → 真实 VPN 网段 | 配置模板已提供；整条链路尚待端到端验收 |
+| Windows WireGuard → localhost UDP → Docker → 真实 UniVPN | 指定新接口的 4/4 SSH、双向 1 MiB HTTP、UDP 及探针失效阻断/恢复通过；默认选路修正待验收 |
 | 旧厂商 CLI 交互菜单 | 此版本实测没有短信续交流程；不再是默认 Compose 后端 |
 | 早期 Qt 控件终端交互实验 | 仅保留研究代码，不在默认路径执行 |
 
@@ -71,6 +71,8 @@ docker compose exec vpn vpnctl status
 
 只有真实目标探针通过、`data_plane_ready` 为 `true` 时，`vpnctl status` 才以状态码 0 退出。探针同时检查 VPN 接口、到目标的路由和业务 banner；例如目标可配置为 `10.80.0.11:22`，前缀为 `SSH-2.0-`。后台转发守卫独立使用这一结果，失败时阻断转发。
 
+状态查询只读最近完成的探针结果，主动探测由后台统一执行，避免并发查询被误判成断网。状态更新存在轮询及探针超时延迟；程序启动或认证成功都不会直接标记网络就绪。
+
 过期、失败或取消的认证上下文不能再次登录。重启容器，再显式发起一次新登录：
 
 ```powershell
@@ -86,7 +88,7 @@ docker compose exec vpn vpnctl login
 
 ## 网段转发实验
 
-Linux WireGuard 客户端经网关到真实 VPN 已完成协议测试；Windows 到真实 VPN 的整条链路仍待验收。认证和实际目标探针通过后，再配置接入链路：
+Linux WireGuard 客户端及 Windows 指定新接口经网关到真实 VPN 已完成协议测试；普通应用默认选路还要解决旧 VPN 的同前缀竞争。认证和实际目标探针通过后，再配置接入链路：
 
 1. 本地分别生成 Windows 和容器 WireGuard 密钥。可使用本机 WireGuard 的 `wg genkey` / `wg pubkey`。不要提交私钥。
 2. 参考 `examples/wg0.conf` 写入 `private/wg0.conf`，容器 peer AllowedIPs 只允许 Windows 接入 `/32`。
@@ -111,7 +113,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-gateway.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-gateway.ps1 -Mode Uninstall -TunnelConfig private/univpn-lab.conf -Elevate
 ```
 
-`ExecutionPolicy Bypass` 仅作用于本次脚本进程，不修改持久策略。脚本拒绝覆盖已有同名服务，也不批量停止其他 VPN。安装命令成功不等于数据面通过；必须继续核对目标的最佳路由、WireGuard 握手/收发计数、容器出口，以及实际业务响应。旧 Windows VPN 仍在线时，服务停用后的访问成功可能来自旧路由，不能当作新链路证据。
+`ExecutionPolicy Bypass` 仅作用于本次脚本进程，不修改持久策略。脚本拒绝覆盖已有同名服务或网卡；新建后核验接口身份、仅设置其 IPv4 ActiveStore metric=0，并逐个复核目标最佳路由。不修改其他 VPN 的 metric，不删除其路由。部分失败会明确报告“可能已安装但选路未就绪”。ActiveStore 设置不承诺在服务重建网卡后保留，仍需另验重启。安装命令成功不等于数据面通过；必须继续核对目标的最佳路由、WireGuard 握手/收发计数、容器出口，以及实际业务响应。旧 Windows VPN 仍在线时，服务停用后的访问成功可能来自旧路由，不能当作新链路证据。
 
 本次真实 UniVPN 接口 MTU 为 1300；显式使用 WireGuard MTU 1280，通过 1 MiB 双向 HTTP 和 UDP 分片测试。这是本次路径的可用值，其他路径仍需测量。首版不修改 DNS；内网域名分流需另行设计。
 
@@ -125,9 +127,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-gateway.
 python -m unittest discover -s tests -v
 ```
 
-当前 114 项单元测试覆盖原生传输分帧、同引擎短信续交、超时/取消/禁止重复提交、证书策略、认证与健康状态分离，以及配置和规则生成。它们使用模拟对象；正式容器的真实短信、隧道和 4/4 台服务器 SSH banner 另行完成实测，不能由单元测试替代。
+单元测试覆盖原生传输分帧、同引擎短信续交、超时/取消/禁止重复提交、证书策略、认证与健康状态分离，以及配置和规则生成。它们使用模拟对象；正式容器的真实短信、隧道和 4/4 台服务器 SSH banner 另行完成实测，不能由单元测试替代。
 
-`tests/network_integration.py` 以 veth 模拟两段隧道；新增 `tests/wireguard_integration.py` 使用真实 kernel WireGuard，VPN 侧仍由 veth 模拟。两者都在独立命名空间测试，不能在正式 VPN namespace 中执行。后者另验 1 MiB 下载摘要、WireGuard 实际握手/收发，以及先证明普通出口可用、再证明它被规则阻断。Windows 辅助脚本另有 16 项模拟检查，不会触发 UAC 或改动系统。
+`tests/network_integration.py` 以 veth 模拟两段隧道；新增 `tests/wireguard_integration.py` 使用真实 kernel WireGuard，VPN 侧仍由 veth 模拟。两者都在独立命名空间测试，不能在正式 VPN namespace 中执行。后者另验 1 MiB 下载摘要、WireGuard 实际握手/收发，以及先证明普通出口可用、再证明它被规则阻断。Windows 辅助脚本另有 21 项模拟检查，不会触发 UAC 或改动系统。
 
 真实 VPN 的 SSH、HTTP、UDP 和健康门控另行实测；模拟探针失败没有断开厂商会话，不能代替真实断线重连验收。历史 Qt/AT-SPI 集成测试使用自建登录窗口，不属于默认 native 后端的认证证据。镜像内存上限不是实际内存消耗，Docker Desktop/WSL 的平台开销应另测。
 

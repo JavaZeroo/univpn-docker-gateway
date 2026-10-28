@@ -1,6 +1,6 @@
-# Windows 网段网关接入：下一步实施边界
+# Windows 网段网关接入：机制、实测与执行边界
 
-2026-10-28。本文件记录官方机制与准备阶段的只读核对；实际实验见[网段网关验证](subnet-gateway-validation.md)。Windows → WireGuard → Docker → UniVPN 整条链路仍待验收。
+2026-10-28。本文件记录官方机制及本机准备、安装和选路冲突；实际实验见[网段网关验证](subnet-gateway-validation.md)。Windows 指定接口到真实 VPN 已通过，普通应用的默认选路仍需修正。
 
 ## 现在可准备什么
 
@@ -17,13 +17,13 @@
 
 Compose 已显式发布 localhost UDP。Docker Desktop 通过后台进程把宿主机发布端口送入 Linux VM；`/udp` 不能省略。这能提供网段隧道的入口，并不把容器桥接 IP 变成 Windows 下一跳。[Docker Desktop 网络](https://docs.docker.com/desktop/features/networking/)、[端口发布规则](https://docs.docker.com/engine/network/port-publishing/)
 
-本机只读快照：WireGuard 1.1.1 已安装；`huawei-new`、Mihomo、Windows UniVPN TAP 均在运行；localhost UDP 51829 由 Docker 后台监听。拟用接入网段与已检查的本机专用路由、Docker bridge 无重叠；这些只证明准备条件，不证明握手。实际业务目标仍走旧 Windows UniVPN 的更宽前缀。
+安装前快照：WireGuard 1.1.1 已安装；`huawei-new`、Mihomo、Windows UniVPN TAP 均在运行；localhost UDP 51829 由 Docker 后台监听。拟用接入地址与已检查的本机专用路由、Docker bridge 无重叠。此时目标走旧 Windows UniVPN 的宽前缀。安装后的新证据和同长度路由竞争见下文，不能继续用安装前快照判断选路。
 
 ## 管理员执行边界
 
 当前进程不是管理员，申请 `SC_MANAGER_CREATE_SERVICE` 权限实测返回 `5 / Access denied`。配置审阅、查路由不需提权；创建新 tunnel 服务需管理员进程。UAC 同意或管理员凭据只能由用户在系统界面完成。[Microsoft 服务权限](https://learn.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights)、[UAC 工作方式](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/user-account-control/how-it-works)
 
-以下只是维护窗口的命令草案，尚未执行：
+用户已通过辅助脚本的 Install 模式创建新服务，新网卡已 Up；自动化进程本身仍未提权。以下保留的是另一种维护窗口命令草案；其中 `Set-Service ... Manual` 并未在本轮执行：
 
 ```powershell
 # 在已由用户打开的管理员 PowerShell 中；配置必须已完成本地审阅。
@@ -39,6 +39,17 @@ Set-Service -Name 'WireGuardTunnel$univpn-hidev' -StartupType Manual
 ## 共存、验收与回滚
 
 WireGuard Windows 会从 AllowedIPs 创建路由；Windows 优先最长匹配，因此业务 `/32` 可覆盖旧 VPN 的宽路由。先检查同长度路由和地址冲突，不删除旧路由、不调整全局 metric。管理器启动 tunnel 时可能停止地址或路由相交的其他 WireGuard tunnel，故新旧配置应先核对不重叠。[WireGuard 路由行为](https://git.zx2c4.com/wireguard-windows/about/docs/netquirk.md)、[Microsoft 路由选择](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-tcpip-interfaces-interface-routes-route-metric)、[管理器实现](https://git.zx2c4.com/wireguard-windows/tree/manager/ipc_server.go)
+
+本轮安装后实际出现旧 VPN 和新 WG 都有 `/32` 的情况，route metric 同为 0，但旧接口 metric=1、新 WG 自动 metric=5，`Find-NetRoute` 仍选旧接口。最长前缀相同时还需比较 route + interface metric。WireGuard Windows 1.1.1 自身在默认路由场景使用 interface metric=0，证明 0 是受支持值；本轮拟仅将新 WG 改为 0，以优先于旧接口的 1。[Microsoft interface metric](https://learn.microsoft.com/en-us/powershell/module/nettcpip/set-netipinterface#-interfacemetric)、[WireGuard 1.1.1 接口配置](https://git.zx2c4.com/wireguard-windows/plain/tunnel/addressconfig.go?h=v1.1.1)
+
+```powershell
+# 管理员执行：只改本次新建的接口，随后重新查询每个目标的 Find-NetRoute。
+Set-NetIPInterface -InterfaceAlias 'univpn-hidev' -AddressFamily IPv4 -AutomaticMetric Disabled -InterfaceMetric 0 -PolicyStore ActiveStore
+# 撤销此接口优先级调整，恢复自动选择。
+Set-NetIPInterface -InterfaceAlias 'univpn-hidev' -AddressFamily IPv4 -AutomaticMetric Enabled -PolicyStore ActiveStore
+```
+
+ActiveStore 表示当前活动配置，不应承诺跨重启持久。非默认路由的 WG 配置不会主动把自动 metric 改回 true，但服务停止/启动会关闭和重建网卡；必须另外验证重启后的实际值，不能固定缓存接口编号。[Microsoft PolicyStore](https://learn.microsoft.com/en-us/powershell/module/nettcpip/set-netipinterface#-policystore)、[WG 服务生命周期](https://git.zx2c4.com/wireguard-windows/plain/tunnel/service.go?h=v1.1.1)
 
 只读预检及启用后的复核命令：
 

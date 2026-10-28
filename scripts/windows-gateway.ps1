@@ -14,6 +14,9 @@ Elevation is opt-in and still requires Windows UAC approval. Only paths and
 nonsecret validation options enter the child command; keys stay in the file.
 The elevated shell uses process-only ExecutionPolicy Bypass so Windows
 PowerShell 5.1 can load this local script. No persistent policy is changed.
+Install checks for a newly created WireGuard adapter, sets only its IPv4
+ActiveStore metric to zero, and verifies target routes. This metric setting
+is not promised to survive tunnel service/adapter recreation.
 Official service commands: https://git.zx2c4.com/wireguard-windows/about/docs/enterprise.md
 #>
 [CmdletBinding()]
@@ -169,6 +172,68 @@ function Get-UVPNExistingService([string]$Name) {
     }
 }
 
+function Get-UVPNAdapters {
+    # Keep identities for pre-existing adapters internally; output only this
+    # tunnel's presence. A renamed old interface must never become our target.
+    return @(Get-NetAdapter -IncludeHidden -ErrorAction Stop |
+        Select-Object Name,InterfaceDescription,ifIndex,InterfaceGuid,Status)
+}
+
+function Get-UVPNClockMilliseconds {
+    return ([Diagnostics.Stopwatch]::GetTimestamp() * 1000.0 / [Diagnostics.Stopwatch]::Frequency)
+}
+
+function Wait-UVPNNewAdapter([string]$Name, [string]$ServiceName, [string[]]$PreviousIdentities) {
+    $deadline = (Get-UVPNClockMilliseconds) + 9000
+    do {
+        $service = Get-UVPNExistingService $ServiceName
+        $matching = @(Get-UVPNAdapters | Where-Object { $_.Name -ceq $Name })
+        if ((Get-UVPNClockMilliseconds) -ge $deadline) { break }
+        if ($matching.Count -gt 1) { throw 'More than one adapter has the dedicated tunnel name.' }
+        if ($matching.Count -eq 1) {
+            $adapter = $matching[0]
+            if ($adapter.InterfaceDescription -cne 'WireGuard Tunnel') {
+                throw 'The dedicated adapter is not a verified WireGuard Tunnel adapter.'
+            }
+            $identity = [string]$adapter.InterfaceGuid
+            $guid = [guid]::Empty
+            if (-not [guid]::TryParse($identity, [ref]$guid) -or $guid -eq [guid]::Empty -or
+                $identity -in $PreviousIdentities -or [int]$adapter.ifIndex -le 0) {
+                throw 'The adapter identity is missing or was already present before installation.'
+            }
+            if ($service -and $service.Name -ceq $ServiceName -and $service.Status -eq 'Running' -and
+                $adapter.Status -eq 'Up') {
+                return $adapter
+            }
+        }
+        if ((Get-UVPNClockMilliseconds) -ge $deadline) { break }
+        Start-Sleep -Milliseconds 200
+    } while ($true)
+    throw 'The newly installed service and WireGuard adapter did not become ready within 9 seconds.'
+}
+
+function Set-UVPNNewAdapterPriority($Adapter, [string]$Name) {
+    # Recheck identity immediately before the only network mutation. Never
+    # select another interface by metric, description, or a broad name pattern.
+    if ($Name -cnotmatch '^univpn-[A-Za-z0-9][A-Za-z0-9_-]{0,24}$' -or $Adapter.Name -cne $Name) {
+        throw 'Only the newly installed dedicated tunnel can receive the gateway priority.'
+    }
+    $current = @(Get-UVPNAdapters | Where-Object { $_.Name -ceq $Name })
+    if ($current.Count -ne 1 -or $current[0].InterfaceDescription -cne 'WireGuard Tunnel' -or
+        [string]$current[0].InterfaceGuid -ine [string]$Adapter.InterfaceGuid -or
+        [int]$current[0].ifIndex -ne [int]$Adapter.ifIndex -or $current[0].Status -ne 'Up') {
+        throw 'The new WireGuard adapter changed before its metric could be set.'
+    }
+    Set-NetIPInterface -InterfaceIndex ([int]$Adapter.ifIndex) -AddressFamily IPv4 `
+        -AutomaticMetric Disabled -InterfaceMetric 0 -PolicyStore ActiveStore -ErrorAction Stop
+    $settings = @(Get-NetIPInterface -InterfaceIndex ([int]$Adapter.ifIndex) -AddressFamily IPv4 `
+        -PolicyStore ActiveStore -ErrorAction Stop)
+    if ($settings.Count -ne 1 -or $settings[0].AutomaticMetric -ne 'Disabled' -or
+        [int]$settings[0].InterfaceMetric -ne 0) {
+        throw 'The new WireGuard IPv4 interface did not retain the requested ActiveStore metric.'
+    }
+}
+
 function Get-UVPNOfficialExecutable([string]$Path) {
     if (-not $Path) { $Path = Join-Path $env:ProgramFiles 'WireGuard/wireguard.exe' }
     $resolved = Resolve-UVPNFilePath $Path -MustExist
@@ -235,6 +300,7 @@ function Invoke-UVPNGateway {
         }
     }
     $stream = $null
+    $installationMayExist = $false
     try {
         $validated = $null
         if ($Mode -ne 'Uninstall') {
@@ -248,14 +314,21 @@ function Invoke-UVPNGateway {
         $exe = Get-UVPNOfficialExecutable $WireGuardExe
         $admin = Test-UVPNAdministrator
         $existing = Get-UVPNExistingService $serviceName
+        $beforeAdapters = @(Get-UVPNAdapters)
+        $existingAdapter = @($beforeAdapters | Where-Object { $_.Name -ieq $name })
+        $previousIdentities = @($beforeAdapters | ForEach-Object { [string]$_.InterfaceGuid })
         $routes = if ($validated) { @(Get-UVPNTargetRoutes $validated.Destinations) } else { @() }
         $result = [ordered]@{ Mode=$Mode; Status='Plan'; Tunnel=$name; ServiceName=$serviceName;
-            Administrator=$admin; ServiceExists=($null -ne $existing); Endpoint=$Endpoint;
+            Administrator=$admin; ServiceExists=($null -ne $existing); AdapterExists=($existingAdapter.Count -gt 0); Endpoint=$Endpoint;
             ClientAddress=if ($validated) { $validated.ClientAddress } else { $null };
             AllowedIPs=if ($validated) { $validated.Destinations } else { @() };
-            MTU=if ($validated) { $validated.MTU } else { $null }; CurrentBestRoutes=@($routes) }
+            MTU=if ($validated) { $validated.MTU } else { $null }; CurrentBestRoutes=@($routes);
+            ExpectedIPv4InterfaceMetric=0; MetricPolicyStore='ActiveStore'; RouteReady=$false }
         if ($Mode -eq 'Plan') { Write-UVPNStatus $recordPath $result; return [pscustomobject]$result }
         if ($Mode -eq 'Install' -and $existing) { throw 'The dedicated service already exists; it will not be replaced or stopped.' }
+        if ($Mode -eq 'Install' -and $existingAdapter.Count) {
+            throw 'An adapter with the dedicated name already exists; it is not owned by this installation.'
+        }
         if ($Mode -eq 'Install' -and @($routes | Where-Object Status -ne 'Resolved').Count) {
             throw 'Cannot verify the current best route for every configured target.'
         }
@@ -272,13 +345,31 @@ function Invoke-UVPNGateway {
         } else {
             $arguments = if ($Mode -eq 'Install') { @('/installtunnelservice', ('"' + $tunnelPath + '"')) }
                          else { @('/uninstalltunnelservice', $name) }
+            $installationMayExist = $Mode -eq 'Install'
             $process = Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop
             if ($process.ExitCode -ne 0) { throw 'WireGuard reported failure; no existing tunnels were automatically changed.' }
-            $result.Status = if ($Mode -eq 'Install') { 'InstallCommandSucceeded' } else { 'UninstallCommandSucceeded' }
+            if ($Mode -eq 'Install') {
+                $adapter = Wait-UVPNNewAdapter $name $serviceName $previousIdentities
+                Set-UVPNNewAdapterPriority $adapter $name
+                $selected = @(Get-UVPNTargetRoutes $validated.Destinations)
+                if ($selected.Count -ne $validated.Destinations.Count -or
+                    @($selected | Where-Object { $_.Status -ne 'Resolved' -or
+                        [int]$_.InterfaceIndex -ne [int]$adapter.ifIndex -or $_.InterfaceAlias -cne $name }).Count) {
+                    throw 'At least one configured target still selects a different interface.'
+                }
+                $result.CurrentBestRoutes = $selected
+                $result.RouteReady = $true
+                $result.Status = 'InstalledAndRoutesVerified'
+            } else { $result.Status = 'UninstallCommandSucceeded' }
         }
         Write-UVPNStatus $recordPath $result
         return [pscustomobject]$result
     } catch {
+        if ($installationMayExist) {
+            Write-UVPNStatus $recordPath @{Mode=$Mode; Status='InstallationMayExistButRoutesNotReady'}
+            throw ('Installation may have completed, but routing is not ready. Only this new tunnel may have changed; ' +
+                'no other adapter or route was rolled back. Inspect the dedicated service before retrying. ' + $_.Exception.Message)
+        }
         Write-UVPNStatus $recordPath @{Mode=$Mode; Status='Failed'}
         throw
     } finally { if ($null -ne $stream) { $stream.Dispose() } }

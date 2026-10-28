@@ -14,6 +14,31 @@ from .native_control import CONTROL_PATH, MAX_CONTROL_MESSAGE
 from .native_engine import NativeEngine
 
 
+def dispatch(auth, request):
+    command = request.get("command")
+    if command == "status":
+        # The background guard owns active probes. A status reader must not
+        # contend for the probe lock and turn "probe busy" into a VPN failure.
+        return auth.status()
+    if command == "login":
+        return auth.login(request["username"], request["password"])
+    if command == "sms":
+        return auth.sms(request["attempt_id"], request["challenge_id"], request["code"])
+    if command == "cancel":
+        return auth.cancel(request["attempt_id"])
+    raise ValueError("unknown control command")
+
+
+def update_forwarding(auth, config, previous):
+    """Apply the background guard's latest completed health result."""
+    ready = auth.health()
+    if ready != previous:
+        gateway.enable(config) if ready else gateway.disable()
+        print("VPN data probe ready" if ready else "VPN data probe failed; forwarding blocked",
+              flush=True)
+    return ready
+
+
 def main():
     os.umask(0o077)
     config = load(os.environ.get("VPN_CONFIG", "/config/vpn.json"))
@@ -34,20 +59,6 @@ def main():
             path.write_bytes(Path("/config/wg0.conf").read_bytes())
             subprocess.run(["wg-quick", "up", str(path)], check=True)
 
-        def dispatch(request):
-            command = request.get("command")
-            if command == "status":
-                status = auth.status()
-                status["data_plane_ready"] = auth.health()
-                return status
-            if command == "login":
-                return auth.login(request["username"], request["password"])
-            if command == "sms":
-                return auth.sms(request["attempt_id"], request["challenge_id"], request["code"])
-            if command == "cancel":
-                return auth.cancel(request["attempt_id"])
-            raise ValueError("unknown control command")
-
         class Handler(socketserver.StreamRequestHandler):
             def handle(self):
                 self.connection.settimeout(100)
@@ -58,7 +69,7 @@ def main():
                     request = json.loads(line)
                     if not isinstance(request, dict):
                         raise ValueError("control request must be an object")
-                    result = dispatch(request)
+                    result = dispatch(auth, request)
                 except Exception as error:
                     # Never serialize arbitrary exceptions, request data or tracebacks.
                     result = {"control_error": "operation failed: " + type(error).__name__,
@@ -88,12 +99,7 @@ def main():
             if not engine.alive:
                 print("Native engine stopped; manual authentication is required after restart.", flush=True)
                 break
-            ready = auth.health()
-            if ready != previous:
-                gateway.enable(config) if ready else gateway.disable()
-                print("VPN data probe ready" if ready else "VPN data probe failed; forwarding blocked",
-                      flush=True)
-                previous = ready
+            previous = update_forwarding(auth, config, previous)
     finally:
         gateway.disable()
         if server is not None:
