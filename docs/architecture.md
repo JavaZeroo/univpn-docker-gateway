@@ -1,141 +1,106 @@
-# 架构与依赖
+# Lite / Full 架构与依赖
 
-本页描述 0.3.0 的公开镜像与 Windows 客户端入口。默认镜像为 `javazero/univpn-docker-gateway:latest`，版本标签为 `0.3.0`；它包含自有前端、脚本及运行依赖，**不包含官方 UniVPN 安装包或二进制**。厂商组件在用户机器上首次启动时从官方获取。发布与离线边界见[镜像说明](image-release.md)。
+0.4.0 提供两种入口，共用官方 UniVPN 的原生认证实现，**每个实例仍有独立的引擎、会话、网卡和路由**。公开镜像不含厂商安装包或二进制，首次在用户机器上从官方获取并校验。
 
-## 一套 VPN 对应一个网络命名空间
-
-```mermaid
-flowchart TB
-    Apps["Windows 应用<br/>目标原始 IPv4 和端口"] --> Client["独立 WireGuard tunnel<br/>只路由目标 CIDR"]
-    Client --> Port["localhost UDP<br/>Docker Desktop 发布端口"]
-    subgraph NS["单个 VPN 容器 / 独立网络命名空间"]
-        WG["wg0 / 内核 WireGuard"] --> Rules["UVPN_IN · UVPN_OUT<br/>目标与出口白名单"]
-        Rules --> NAT["UVPN_NAT / MASQUERADE"]
-        NAT --> TUN["cnem_vnic / 官方 VPN"]
-        Guard["后台业务探针"] -. "就绪放行 / 失败 DROP" .-> Rules
-    end
-    Port --> WG
-    TUN --> Gateway["远端 UniVPN 网关"] --> Targets["已授权内网服务"]
-```
-
-WireGuard 提供 Windows 到容器的三层入口，远端连接仍由 UniVPN 完成。`wg0` 是 Linux 内核接口，不是第二个常驻代理程序；每套 VPN 只运行一个容器，不按 SSH、HTTP 等业务逐个发布端口。
-
-实例之间不共享网络命名空间，不使用 host 网络。Windows 仍按目的 IP 选路，因此容器隔离不能同时区分两套 VPN 中相同的远端地址；当前不提供重叠目的地映射、IPv6 或条件 DNS。
-
-## 镜像交付与厂商组件准备
-
-```mermaid
-flowchart TB
-    Hub["公开镜像<br/>自有代码 + 开源运行依赖"] --> Export["export-client<br/>导出 CMD 入口 + 四个 PS 脚本"]
-    Export --> Client["univpn.cmd → univpn.ps1<br/>profile / Compose / 交互认证"]
-    Client --> Entry["容器 image_entrypoint"]
-    Entry --> Prepare["prepare_vendor<br/>检查本实例已安装文件"]
-    Prepare -->|"需要恢复文件"| Read["读取缓存或临时下载"]
-    Official["厂商固定 HTTPS ZIP"] -. "缓存未命中" .-> Read
-    Cache["vendor-cache named volume<br/>仅已校验的 ZIP"] --> Read
-    Read --> Verify["ZIP + RUN + 六文件 SHA256<br/>拒绝链接、重复与越界条目"]
-    Verify -. "新下载校验后原子发布" .-> Cache
-    Verify --> Local["本容器运行副本<br/>六文件 + 稳定 sysconfig 模板"]
-    Local --> Native["native_service<br/>官方引擎 + 终端 MFA + 守卫"]
-    Prepare -->|"已安装文件匹配"| Native
-```
-
-公开构建使用 [Dockerfile.public](../Dockerfile.public)，不运行厂商安装器。首次准备从固定 ZIP 中只读取白名单文件，写入当前容器的 `/usr/local/UniVPN`、`/lib/libgmcrypto.so` 和 `/opt/gateway/vendor-sysconfig.ini`，去掉归档中的 setuid 位；不执行安装脚本或它的系统配置修改。
-
-缓存只保存验证过的 ZIP，带互斥和原子发布；每个容器复制出自己的厂商文件，不把会被引擎修改的配置目录放入共享缓存。默认 Compose 项目各有自己的 named volume；重建同一项目可复用缓存，不等于所有实例共享一次下载。缓存损坏或摘要变化会失败，不回退到第三方或未校验包。
-
-`export-client` 导出 `univpn.cmd`、`univpn.ps1`、`windows-profile.ps1`、`windows-gateway.ps1`、`windows-prerequisites.ps1` 到新的 `/output/univpn` 目录；不下载厂商程序，不启动 VPN，也不需要网络管理权限。导出拒绝合并覆盖旧目录。CMD 入口只调用同目录的 PowerShell 实现，执行策略例外限于该进程。
-
-## Windows 宿主机引导
-
-`univpn.cmd` 是镜像导出的 Windows 启动脚本，在用户选定空文件夹的 PowerShell 中运行。`windows-prerequisites.ps1` 由 Init/Connect 调用：标准目录下两个官方程序签名有效则复用，完全未安装时才获取固定 MSI、校验 SHA256 和 WireGuard LLC 签名后安装。部分安装、自定义位置或已有异常服务会先停止，不升级/修复既有客户端。
-
-安装目标是 Windows 的 `C:\Program Files\WireGuard`，不在 Docker VM 中。MSI 使用 `/qn /norestart DO_NOT_LAUNCH=1`，不自动重启或打开 GUI；返回 3010 时先告知需要重启，停止后续连接。安装程序与后续专属 tunnel 创建可能分别需要 UAC。宿主机准备与 Linux 容器准备是两个步骤，Docker 镜像本身不会跨越这条权限边界。
-
-只新增 `univpn-*` 隧道，已有 WireGuard 安装不运行 MSI；目标 CIDR 重叠时仍有实际选路竞争。关于三种接入方式，见[简化分析](simplification.md)。
-
-## Windows 的连续入口
-
-```mermaid
-sequenceDiagram
-    actor User as 用户终端
-    participant Client as univpn.cmd / univpn.ps1
-    participant Profile as 本地 profile 与 Plan
-    participant Docker as Docker / image_entrypoint
-    participant Service as native_service / UniVPNCS
-    participant Windows as 专属 Windows tunnel
-    User->>Client: Connect（默认动作）
-    Client->>Windows: 检查 WireGuard；缺失才校验 MSI 并请求安装
-    Client->>Profile: 首次 Init：配置、双端密钥、受限文件
-    Profile-->>Client: 校验目标、地址、端口及路由计划
-    Client->>Docker: 启动本实例，缺少镜像才拉取
-    Docker->>Service: 校验/准备厂商文件，启动持久 RPC
-    Client->>Service: 等待本地控制接口就绪
-    User->>Service: 同一 TTY 输入账号、密码、短信
-    Service-->>Client: 认证、隧道及真实目标探针状态
-    Client->>Windows: 新建时请求 UAC；已有服务只核验复用
-    Client->>Windows: 普通 TcpClient 检查目标 banner
-    Client-->>User: 报告该 profile 的实际检查结果
-```
-
-[windows-profile.ps1](../scripts/windows-profile.ps1) 的 `Init` 已实现双端密钥生成、访问地址和 `AllowedIPs` 配对、文件权限限制及只读 `Plan`；不再要求用户手工交换公钥或重复填写目标 CIDR。它不启动 Docker、不安装网卡，这些由 [univpn.ps1](../scripts/univpn.ps1) 的 `Connect` 串接。
-
-`Connect` 对 idle 会话显式调用 `vpnctl login`，对尚未完成的短信挑战调用 `vpnctl sms`，已认证时不重新发送密码。失败、过期或取消的上下文需要用户先停止再明确发起新连接；没有自动重试认证或重发短信。口令和验证码只进入交互终端及受限本地 IPC，不进入 profile、命令参数或镜像。
-
-新的 Windows tunnel 由已有校验器安装：只接受独立命名的接口，设置本次新接口的 IPv4 ActiveStore metric=0，再核对目标最佳路由。已有服务须为 Running 且目标路由正确才能继续复用；不自动覆盖服务或修改其他 VPN 的优先级。最终检查是**一个配置目标的普通 TCP banner**，不会自动替用户验证所有目标的 HTTP/UDP。
-
-## 运行依赖分层
-
-```mermaid
-flowchart TB
-    subgraph Host["Windows 主机"]
-        PS["CMD / PowerShell 客户端"] --> WWG["官方 WireGuard for Windows"]
-        Docker["Docker Desktop + Compose"] --> VM["本次环境：WSL 2 Linux VM"]
-    end
-    VM --> Kernel["共享 Linux 内核<br/>WireGuard · TUN · netfilter"]
-    subgraph Image["Ubuntu 22.04 / Linux amd64 用户态"]
-        Tini["tini / PID 1"] --> Python["Python 3 标准库"]
-        Python --> Tools["iproute2 · iptables · wireguard-tools"]
-        CA["ca-certificates"] --> Python
-        Python -->|"首次获取到本机，不在公开镜像内"| SDK["UniVPNCS + PromoteService<br/>libgmssl · legacy · libgmcrypto · sysconfig"]
-    end
-    Docker --> Image
-    Python -->|"本地 CSDK/RPC"| SDK
-    SDK -->|"NET_ADMIN + /dev/net/tun"| Kernel
-    Tools -->|"接口配置 / netfilter"| Kernel
-    WWG -. "localhost UDP → wg0" .-> Kernel
-```
-
-| 位置 | 需要的组件 | 职责 |
+| | Lite | Full |
 | --- | --- | --- |
-| Windows | Docker Desktop / Compose、PowerShell、官方 WireGuard | 启动容器、导出/运行客户端、提供按目标选路的网卡；默认用户路径无需 Git、Node.js 或 Windows Python |
-| Linux 内核 | WireGuard、TUN、网络命名空间、netfilter | 提供接口、路由、过滤与 SNAT；安装工具包不等于内核已有 WireGuard 支持 |
-| 公开镜像 | Ubuntu 22.04 amd64、Python 标准库、tini、CA、网络工具与自有脚本 | 准备厂商组件、控制认证、管理进程和转发；没有第三方 Python 包或图形栈 |
-| 首次本地获取 | 固定 `10781.21.0.0831` 的六个厂商文件及稳定配置模板 | 实际协议兼容、远端认证与 UniVPN 隧道；其许可独立于本项目 GPL |
-| 权限 | `NET_ADMIN`、`/dev/net/tun`、IPv4 forwarding | 只配置本实例网络；不用 privileged，也不接管宿主机网络命名空间 |
-| 外部 | 官方下载服务、远端 VPN 网关、合法账号和 MFA | 首次缓存未命中需访问下载服务；每次真实连接仍需远端认证及业务环境 |
+| 标签 | `lite` / `0.4.0-lite` | `full` / `0.4.0-full`；兼容别名 `latest` / `0.4.0` |
+| Windows 应用入口 | 应用配置 `127.0.0.1:1080` SOCKS5 | 应用直接使用目标原始 IP |
+| 范围 | SOCKS5 CONNECT，数字 IPv4、TCP | 明确的 IPv4 目标 CIDR，TCP / UDP |
+| Windows 网络组件 | 不需要 WireGuard，不修改网卡或路由 | 启动器准备官方 WireGuard 和专属 `univpn-*` 接口 |
+| 使用方式 | 容器终端配置、登录并保持前台运行 | 导出客户端，Windows 启动器连接和管理实例 |
 
-WSL2 是本次部署后端，并非 Docker Desktop 唯一可能的后端。当前兼容验证限于 Linux amd64 与上述厂商版本。默认路径没有 Qt、X11、Xvfb、DBus、AT-SPI 或 VNC；历史 CLI/GUI 目标只作研究对照。
+Lite 是应用代理，不是透明网段入口；裸 `ssh` 不会自动使用它。教程分别见 [Lite](lite.md) 与 [Full](quickstart.md)。
 
-## 状态、配置和生命周期
+## 两条数据路径
 
-| 状态或文件 | 生命周期 |
-| --- | --- |
-| 导出的五个客户端文件 | 跟随镜像版本；再次导出用新目录，不覆盖已有客户端 |
-| `private/<name>/profile.json`、`vpn.json`、双端 WG 配置 | 本机 profile；密钥不覆盖，目标从单份配置配对；运行中修改 JSON 不自动刷新白名单 |
-| profile 内生成的 `compose.yml` | 固定该实例的镜像、端口、项目与挂载；已有 profile 不会因重复 Connect 自动升级镜像 |
-| `vendor-cache` named volume | 只缓存固定 ZIP；停止或普通 `compose down` 不删除卷 |
-| 本容器厂商运行副本及稳定模板 | 从校验包恢复；不共享可变配置，稳定模板支持官方删除原配置后的初始化 |
-| 登录上下文及厂商日志目录 | 运行期状态；过期挑战不复用，厂商子进程输出不直接转入 Docker 日志 |
+```mermaid
+flowchart TB
+    LA["Lite：已设置代理的应用"] --> TCP["127.0.0.1:1080/TCP"]
+    subgraph Lite["Lite 实例：一个容器"]
+        SOCKS["Python SOCKS5 TCP relay"] --> LG["目标白名单 + ready<br/>设备绑定 + 实际路由检查"]
+        LG --> LN["cnem_vnic / 官方 UniVPN"]
+    end
+    TCP --> SOCKS
+    FA["Full：应用使用原始 IP"] --> W["Windows 专属 WireGuard 网卡"]
+    W --> UDP["localhost UDP 发布端口"]
+    subgraph Full["Full 实例：一个容器"]
+        WG["wg0 / 内核 WireGuard"] --> FG["FORWARD 白名单 + SNAT<br/>ready 失败时 DROP"]
+        FG --> FN["cnem_vnic / 官方 UniVPN"]
+    end
+    UDP --> WG
+    LN --> Remote["远端 UniVPN 网关 / 已授权目标"]
+    FN --> Remote
+```
 
-认证成功、隧道启动、业务就绪分别判断。后台统一主动探测接口、目标路由及真实 banner，状态请求只读最近结果；失败后守卫更新专属链为 DROP，即使普通 `eth0` 有可用路由也不准回落。状态与门控存在轮询和探针超时延迟。
+**Lite 的业务字节经过 Python 流转发。** 每次连接只接受 `allowed_cidrs` 中的数字 IPv4：ATYP1 或域名字段中的规范点分 IPv4，真正域名、IPv6、BIND 和 UDP ASSOCIATE 均拒绝。它不解析代理请求中的目标域名；VPN 网关本身仍可配置为域名。
 
-`Stop` 只停止本实例容器，保留 Windows 接口、目标路由、密钥和缓存；这时目标可能仍指向不可用入口，Docker Desktop/WSL 也不会自动退出。`Remove` 卸载本实例 Windows tunnel 后执行本项目 `compose down`，保留本地 profile 和 volume；不删除其他 VPN。
+每个出站 socket 在 connect 前用 `SO_BINDTODEVICE` 绑定 `vpn_interface`，并以 `ip -j route get` 确认实际出口相同，任一步失败都不创建普通出口连接。代理只接受缓存状态中的布尔就绪值；缓存变为未就绪后拒绝新请求，按约 0.2 秒周期关闭已有流。并发、总握手时间与双向缓冲有上限。代理自身不提供用户名密码认证，因此只将端口发布到本机回环地址，不将 VPN 账号填入应用的 SOCKS 认证栏。
 
-## 已验证与尚待验收
+**Full 的三层业务由内核转发。** `wg0` 和 `cnem_vnic` 位于同一容器；Python 控制认证、业务探针及专属链，不代理每个业务字节。只允许已配置源地址和目标从 VPN 接口转发，SNAT 提供返回路径；普通 `eth0` 不作为替代出口。应用自己指定的代理仍生效，Full 不会取消它。
 
-既有链路已通过真实短信认证，以及 Windows 默认选路的 4/4 SSH、双向各 1 MiB HTTP、UDP 和探针故障阻断/恢复，详见[网段网关记录](subnet-gateway-validation.md)。这不代表新 `Connect` 包装器已经完成一次真实短信与新 Windows 安装的全流程验收。
+两版均不使用 host 网络或共享实例网络命名空间。Full 的重叠目标会竞争同一 Windows 路由表；Lite 由应用选择不同代理端口，但多实例重叠目标仍未独立验收。两版都不提供内网条件 DNS 或 IPv6。
 
-新准备流程已完成全新缓存的官方在线下载，以及第二个无网络新容器的 `cache_hit: true` 检查。公开 push 及新包装器验收应以各自发布记录为准。现存已连接旧容器尚未重启，健康查询竞争修复仍未在该会话生效。Windows 服务/系统重启的优先级持久性、真实厂商断线后的重新认证、Docker/WSL 重启恢复仍需独立验证。
+## 共用的准备与认证控制
 
-参考：[Docker Desktop 网络](https://docs.docker.com/desktop/features/networking/)、[WireGuard 命名空间](https://www.wireguard.com/netns/)、[Windows 隧道服务](https://git.zx2c4.com/wireguard-windows/about/docs/enterprise.md)。进一步取舍见[简化分析](simplification.md)，使用方式见[快速开始](quickstart.md)。
+```mermaid
+flowchart TB
+    L["Lite：终端网络配置 / TTY"] --> Entry["image_entrypoint"]
+    F["Full：Windows profile / Compose"] --> Entry
+    Entry --> Prepare["prepare_vendor"]
+    Official["官方固定 HTTPS ZIP"] -. "缓存未命中时下载" .-> Verify["固定 ZIP / RUN / 六文件校验"]
+    Cache["厂商缓存卷：只保存固定 ZIP"] --> Verify
+    Prepare --> Verify
+    Verify -. "新下载通过后原子发布" .-> Cache
+    Verify --> Files["本容器六文件 + 稳定配置模板"]
+    Files --> Engine["UniVPNCS + PromoteService<br/>每实例持久本地 RPC"]
+    TTY["vpnctl：账号、密码、短信"] --> Engine
+    Engine --> Auth["NativeAuth：认证 / 隧道 / 业务就绪"]
+    Auth --> Guard["后台真实 banner 探针"]
+    Guard --> Gate["Lite 代理 gate / Full 转发链"]
+```
+
+[vendor_runtime.py](../univpn_gateway/vendor_runtime.py) 只解出固定 `10781.21.0.0831` 所需的六个文件及稳定 `sysconfig.ini` 副本，不执行厂商安装脚本。缓存有互斥和原子发布，已安装文件或缓存每次复核；损坏或摘要变化会失败，不换未校验来源。缓存可复用，**可变配置和认证会话不共享**。默认 Full Compose 项目各有缓存卷；Lite 示例明确命名的卷可供不同实例复用固定归档。
+
+两版通过同一 [native_service.py](../univpn_gateway/native_service.py)、[native_auth.py](../univpn_gateway/native_auth.py) 控制官方引擎。密码与短信由 `vpnctl` 的 TTY 输入，验证码续交到同一挑战；失败、过期或取消后不自动重试。认证成功、隧道启动、真实目标探针通过是三个状态，监听端口存在不表示已放行业务。状态查询只读最近结果，不额外发起探针；状态和门控有轮询及探针超时延迟。
+
+## 依赖分层
+
+```mermaid
+flowchart TB
+    Docker["共同：Docker Desktop / Linux 容器<br/>本次 Windows 后端为 WSL2"] --> Kernel["Linux 内核：网络命名空间 + TUN"]
+    Docker --> Common["共同用户态：Ubuntu 22.04 amd64<br/>Python 标准库 / tini / CA / iproute2"]
+    Common --> SDK["首次本地获取：官方 UniVPNCS<br/>辅助服务 / 厂商库 / 配置模板"]
+    Common --> Lite["Lite：SOCKS5 TCP relay<br/>SO_BINDTODEVICE + route guard"]
+    Common --> Full["Full：wireguard-tools + iptables<br/>Windows CMD / PowerShell 启动器"]
+    WinWG["仅 Full：Windows WireGuard<br/>驱动 / 隧道服务 / 目标路由"] --> Full
+    Full --> WGKernel["仅 Full：Linux WireGuard<br/>netfilter / IPv4 转发 / SNAT"]
+    Kernel --> WGKernel
+    SDK --> Kernel
+    Lite --> Kernel
+```
+
+共同基础层还安装 `iptables`，但 Lite 的 SOCKS 路径不依赖 Full 的 FORWARD/SNAT 链。Lite 镜像没有 `wireguard-tools`、Windows 客户端文件或 WireGuard 内核接口要求；Full 才额外使用这些组件。两版均使用 `NET_ADMIN` 和 `/dev/net/tun`，不需要 privileged；无第三方 Python 包或 Qt/X11/VNC 图形栈。
+
+Full 的 Windows 启动器导出五个文件，`Init` 生成受限 profile、双端 WG 密钥及 Plan；`Connect` 串接容器准备、TTY 登录或 SMS 续交、专属 tunnel 安装/复用及一个普通 TCP banner 检查。WireGuard 已有效安装则复用，完全缺失才验证官方固定 MSI 并请求安装；不修复/升级部分或异常安装。MSI 和创建隧道可能分别要求 UAC，3010 会停止并提示重启。Linux 容器不会替 Windows 安装驱动。
+
+## 状态与生命周期
+
+| | Lite | Full |
+| --- | --- | --- |
+| 网络配置 | `/config/lite/vpn.json`，root 0700 目录 / 0600 文件；已有配置只读复用 | Windows `private/<name>/` 的 profile、网络配置、WG 密钥及 Compose |
+| 认证与运行 | `docker run -it` 的同一终端配置和登录，保持前台；高级 `serve` 可配合独立 TTY 登录 | 容器服务与 Windows launcher 分离；有效短信挑战续交，已认证时不重复密码 |
+| 就绪失败 | 拒绝新 SOCKS 请求并关闭已有流；不影响 Windows 路由 | 专属转发链 DROP；Windows 接口仍可能为 Up |
+| 停止 | 示例 `Ctrl+C` 结束容器；`--rm` 删除可写层，配置和厂商缓存卷保留 | `Stop` 停容器，保留 Windows 网卡、路由、密钥与缓存 |
+| 移除入口 | 停容器后本机代理端口释放；应用仍保留其代理设置，需用户自行调整 | `Remove` 卸载本实例 tunnel，再 Compose down；保留 profile 文件与缓存卷 |
+
+自有前端不把账号、密码或 OTP 写入网络配置或厂商缓存。厂商运行文件、日志和进程内认证状态属于本次实例，不能把正在运行的容器 commit 成公开镜像。重建容器需要显式重新认证，卷保留不等于保留登录会话。停止某个实例也不会自动关闭 Docker Desktop/WSL 平台。
+
+## 验证边界
+
+- **既有 Full 真实链路：** 原生短信认证；Windows 默认选路 4/4 SSH、双向各 1 MiB HTTP、UDP、探针故障阻断与恢复。[证据](subnet-gateway-validation.md)
+- **Lite 协议与隔离网络：** [单元测试](../tests/test_socks_proxy.py) 覆盖握手、半关闭、部分写入及就绪撤销；[独立 namespace 测试](../tests/socks_integration.py) 已在一次性 Docker 容器通过真实内核设备绑定、SSH、1 MiB HTTP、来源、白名单、就绪恢复，以及普通出口可用时的回落阻断。VPN 一侧是 veth 模拟，不能代替真实 UniVPN 数据面。
+- **Lite 镜像准备：** 已验证缓存校验、TTY 配置向导、官方引擎 idle 及未认证 SOCKS 请求拒绝；这不是一次真实登录。
+- **仍待验收：** 新 Lite 入口真实 VPN 登录后的整体路径、新 Full launcher 的完整短信/新网卡流程、Windows 服务/系统重启的优先级持久性及真实厂商断线重认证。现存已连接旧容器没有重建，健康查询竞争修复尚未在该会话生效。
+
+构建、固定摘要和许可见[镜像说明](image-release.md)，取舍见[简化分析](simplification.md)。

@@ -14,7 +14,9 @@
 - 192 项 Python 测试在 Windows 通过（8 项平台相关跳过）。隔离 Linux 网络测试实际验证 SOCKS5 SSH、1 MiB HTTP、真实 `SO_BINDTODEVICE`、白名单、就绪撤销/恢复，以及普通出口可用时禁止回落。VPN 在此测试中由 veth 模拟。
 - Lite 镜像已在无网络的一次性容器内完成真实 TTY 配置、0700/0600 权限检查、固定官方缓存校验及官方引擎 idle 初始化；未认证的 SOCKS 请求被拒绝，镜像内没有 `wg`、`wg-quick` 或 Windows 客户端文件。
 - 新 Lite 完整真实 VPN 认证及应用端到端接入仍待独立验收；未为发布重新触发短信或重启现存 VPN。Full 既有真实数据链路证据见[验证记录](subnet-gateway-validation.md)。
-- 镜像摘要与本次 CI 链接在发布完成后补入；以下历史摘要继续对应其各自固定标签。
+- [8 项 CI 检查通过](https://github.com/JavaZeroo/univpn-docker-gateway/actions/runs/40834447078)，分别构建 Lite / Full，验证两条网络路径及 Windows 引导。镜像源码 revision：`8767e242a5a67cee88f5d111ee4165905c312660`。
+- 六个标签均已 push 并通过匿名 Registry manifest / 配置核验；Lite 的 OCI index 为 `sha256:da6fe3f9ee165bee3e8dfe2d087c853d6fcc9b7f4efcc8861de20e2545596182`，Full 及其兼容别名为 `sha256:d07a1d1e01f0e48b5a46a440a35bc75a8a97b032a4113723d5009abf10b59b70`。
+- Linux/amd64 层压缩合计分别为 43,632,061 字节（Lite）和 43,795,158 字节（Full）；这是下载量，不是运行内存。两版仍依赖 Docker Desktop / WSL 的平台资源，不能由镜像大小推断内存收益。
 
 ## 0.3.0 发布记录（2026-10-29）
 

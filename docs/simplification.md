@@ -1,63 +1,40 @@
-# 简化现状与取舍
+# Lite / Full：怎样选更简单
 
-核对日期：2026-10-29。当前重点已从“设计配置生成器”变为验收已有连续入口，不能继续把已实现的 `Init`、`Plan` 和 `Connect` 列作计划。
+0.4.0 已实现 Lite 应用代理与 Full 网段入口。两版共用原生终端认证，公开镜像都不包含厂商软件，首次从官方获取并校验后缓存；无需用户本机构建或另开 Windows 虚拟机。
 
-## 已实现的简化
+| 需求 | 选择 | 需要接受的边界 |
+| --- | --- | --- |
+| 只想启动 Docker，应用支持设置 SOCKS5，只用 IPv4 TCP | [Lite](lite.md) | 每个应用选择代理；不解析目标域名，不支持 UDP/BIND/IPv6；裸 SSH 不自动走代理 |
+| 应用直接填写原始 IP，或需要 UDP | [Full](quickstart.md) | Windows 需要 WireGuard、专属网卡与路由；启动器按需准备，系统授权仍由用户完成 |
 
-| 用户原本要处理的事情 | 当前实现 |
-| --- | --- |
-| 拉源码、安装 Python 依赖、本机构建 | 默认使用 `javazero/univpn-docker-gateway` 预构建镜像；镜像导出 CMD 入口与三个配套 PowerShell 脚本 |
-| 手工下载、解包厂商安装器 | 首次容器启动从官方固定 URL 获取并校验；之后复用 named volume 内的固定 ZIP，不执行安装脚本 |
-| 生成两端密钥、交换公钥、重复抄目标 CIDR | `windows-profile.ps1 Init` 生成受限本地 profile、双端 WG 配置；由一份 VPN 配置生成 Windows AllowedIPs，并执行只读 Plan |
-| 分别调用 Compose、登录、网卡安装和检查 | `univpn.cmd` 调用默认 Connect，串起初始化、计划、镜像/容器、TTY 登录或短信续交、专属 WG 安装/复用及普通 TCP banner 检查 |
-| 开桌面、VNC 或额外 Web 登录服务 | Python 标准库直接控制官方本地 CSDK/RPC，在终端续交同一短信挑战 |
-| 单独部署 WG 或逐业务做端口映射 | 一个容器内放 `wg0` 和 UniVPN，内核转发原始 IPv4；没有 WG sidecar、用户态 WG 守护进程或逐服务 socat |
+标签为 `lite` / `0.4.0-lite` 和 `full` / `0.4.0-full`。`latest` / `0.4.0` 为兼容仍指 Full，不因 Lite 新增而改变老用户入口。
 
-公开镜像不含厂商软件；首次获取发生在用户机器上。缓存和可变运行目录分离，容器之间不共享认证配置。默认不同 Compose 项目各有自己的缓存卷，并非全机只下载一次。来源及固定摘要见[镜像说明](image-release.md)。
+## 已省掉什么
 
-## 用户现在面对的入口
+- **共同：** 无桌面、VNC 或额外 Web 登录服务；Python 标准库通过本地 RPC 续交同一短信挑战。固定包自动获取、缓存校验与独立运行副本已经实现。
+- **Lite：** 不安装 WireGuard、不导出 Windows 启动器、不改 Windows 网卡或路由。一个 `docker run -it` 在终端完成网络配置和登录；应用使用本机 SOCKS5 端口。
+- **Full：** `Init` 自动生成双端密钥和配置，目标 CIDR 不再重复抄写；`Connect` 串接 Compose、TTY 登录、Windows 安装/复用和一个真实 banner 检查。已有有效 WireGuard 不升级，部分安装或异常服务先停止，不擅自修复。
 
-首次只需预装 Docker Desktop 的 Linux 容器环境；导出客户端到新空目录后，在同一个 Windows PowerShell 中运行 `univpn.cmd`。0.3.0 的 Windows 引导会复用有效 WireGuard 安装，仅完全缺失时才校验官方固定 MSI 并安装；用户不需要手动安装它。用户仍需提供网关、明确目标、真实 banner 探针，并在终端输入账号密码和短信；WireGuard 安装与新建 Windows 接口可能分别要求 UAC。CMD 只为本次 PowerShell 进程设置执行策略，不改持久策略。
+两版都是每套 VPN 一个容器，不需要 WG sidecar 或逐业务端口转发。Lite 的每个出站 TCP socket 强制绑定 VPN 接口并核对实际路由，真实探针就绪才接受业务；Full 则以过滤链、SNAT 和明确出口约束内核转发。实现与依赖见[架构](architecture.md)。
 
-| 动作 | 当前语义 |
-| --- | --- |
-| `Init` | 检查/准备宿主机 WireGuard，再生成 profile 与 Plan；不登录 VPN 或创建隧道网卡，拒绝覆盖已有密钥 |
-| `Connect` | 默认动作；缺 profile 才初始化；等待容器就绪，按当前认证状态登录或续交 SMS；检查路由与一个真实 TCP banner |
-| `Status` | 查看容器认证/就绪状态与 Windows 当前最佳路由；不重新登录 |
-| `Stop` | 只停止本实例容器，保留 Windows tunnel、密钥与缓存；目标路由可能继续指向不可用入口 |
-| `Remove` | 卸载本实例 Windows tunnel，再 `compose down`；保留 profile 文件和缓存卷 |
+## 这次简化改变了访问方式
 
-这减少了手工文件配对和命令拼接，但没有首次使用耗时的前后对照，不能承诺“几分钟完成”或按入口数量计算提速。Connect 的最终检查是配置中的一个 TCP banner，完整 HTTP/UDP、全部目标和故障恢复仍需对应业务验收。
+Lite 做到了“不手装 Windows 网络组件”，代价是应用必须使用代理。SOCKS5 中的域名字段只接受规范数字 IPv4，`socks5h` 也不会让真正域名自动可用；它不是透明网段网关。其代理没有额外账号密码，入口只发布到 `127.0.0.1`，VPN 凭据仍在容器终端输入。
 
-## 能否只运行一个容器
+Full 保留原始 IP 的 TCP/UDP 路径。[Docker Desktop 的 Linux bridge 不直接向 Windows 暴露](https://docs.docker.com/desktop/features/networking/networking-how-tos/#known-limitations)，[Desktop host networking 只提供 L4 能力](https://docs.docker.com/engine/network/drivers/host/#limitations)；仅删除 WG、添加一条指向容器 IP 的路由不能替代当前入口。自动安装 WG 减少人工操作，仍是 Windows 本机引导，不是 Docker 跨越权限边界。
 
-这里区分“少装一个软件”和“同样支持 Windows 普通应用按原始 IP 访问”。0.3.0 已省去用户手动装 WireGuard 的步骤，但仍会在 Windows 建立网络入口。
+Full 的不同 VPN 若目标地址重叠，会竞争 Windows 选路。Lite 可以让应用选择不同代理端口，避开同一系统路由表的歧义，但多实例重叠目标仍未独立验收；两版都不能绕过网关对同一账号的并发限制。
 
-| 方式 | Windows 额外准备 | 访问范围 | 本项目状态 |
-| --- | --- | --- | --- |
-| 程序也在 VPN 容器或共享其网络的容器里 | 可只用 Docker | 容器内应用使用 VPN，Windows 应用不会自动获得相同路由 | Docker 平台能力；当前启动器未封装独立容器工作流 |
-| 容器提供 HTTP/SOCKS 代理 | 应用设置代理，SSH 还需相应代理入口 | 取决于应用和代理协议，不能直接等同所有 TCP/UDP/系统 DNS | 当前镜像未提供代理模式，不能按已有功能宣传 |
-| Windows 普通应用按目标原始 IP 访问 | 宿主机网卡与路由；当前由启动器准备 WireGuard | 已配置 IPv4 目标的 SSH、HTTP、UDP 等 | 当前采用的路径 |
+## 没有省掉的事
 
-[Docker Desktop 网络限制](https://docs.docker.com/desktop/features/networking/networking-how-tos/#known-limitations)说明 Linux bridge 不直接暴露给 Windows 宿主机；[Desktop host networking](https://docs.docker.com/engine/network/drivers/host/#limitations)是 L4 能力，不能据此让 Windows 自动得到容器 VPN 路由。因此只启动一个 Linux 容器，不能完整实现第三行的用户体验。自动安装宿主机组件可以减少人工步骤，但仍是 Windows 引导程序的行为。
+账号、密码、短信及真实目标探针仍不可缺；认证失败、过期或取消后需要明确发起新尝试，不自动重发短信。原生引擎只验证当前固定 Linux amd64 版本，厂商协议和使用许可不会因为容器封装而改变。
 
-独立 `univpn-*` 服务保护已有隧道配置；已安装 WireGuard 时不再运行 MSI。目标 CIDR 与旧隧道重叠，仍会参与 Windows 选路，必须实查，不能宣称完全无影响。
+Lite 停止后释放代理端口，但应用的代理配置不会自动清除；Full 的 `Stop` 保留网卡和目标路由，`Remove` 才释放该入口。配置与缓存卷保留，认证会话不保留。
 
-## 保留哪些依赖，为什么
+不声称 Lite 在任何负载下都更省内存或更快：它省去 WG 组件和宿主机引导，但 TCP 业务经过 Python relay。既有 18.8 MiB 是一次旧容器样本，不是 Lite 测量或整机成本；Docker Desktop/WSL 的平台开销仍需单独测量。
 
-- **官方引擎和 MFA：** 当前由 UniVPNCS、辅助服务及厂商库承担真正的 VPN 协议；终端前端没有替代远端认证。失败后需用户明确重新连接，不自动试密码或重发短信。
-- **Windows 三层入口：** 普通应用要直接访问内网 IP，需要可达的 IP 接口与路由。新网卡和服务仍需管理员权限，包装器只能集中请求，不能绕过。
-- **容器隔离、白名单和真实探针：** 接口存在或认证成功不足以判断业务可达；仅允许指定目标从 `cnem_vnic` 转发，阻止普通出口回落。
-- **Docker Desktop/WSL 平台：** 当前容器内的工具已较少，但 Linux 平台成本不会随它们一起消失。既有 18.8 MiB 单次容器样本不包含整机平台内存，也不是稳态或峰值承诺。
+## 接下来先验收
 
-本轮保留 WireGuard：[Docker Desktop 官方说明](https://docs.docker.com/desktop/features/networking/networking-how-tos/#known-limitations)指出 Windows 宿主机不能直接路由到其 Linux bridge 容器；Desktop 的 [host networking 只提供 L4 能力](https://docs.docker.com/engine/network/drivers/host/#limitations)。[WSL mirrored networking](https://learn.microsoft.com/en-us/windows/wsl/networking#mirrored-mode-networking)改善兼容性，但没有承诺自动把 Linux VPN 接口及 Docker 私有路由反向提供给 Windows。
+既有 Full 已有真实短信、4/4 SSH、双向 1 MiB HTTP、UDP 与探针故障恢复证据。Lite 的协议测试和一次性隔离容器已验证真实内核绑定、1 MiB HTTP、就绪撤销/恢复及可用普通出口下的回落阻断，VPN 段仍由 veth 模拟。
 
-原生 Linux 主机可另行研究直接路由到容器；这不是当前 Windows 入口的等价删组件操作。SSH 端口转发和 HTTP/SOCKS 代理可以满足更窄的需求，不能替代本次“普通应用按目标 IP 访问”的交付目标。
-
-## 下一步优先验收，不继续堆功能
-
-1. 新镜像已通过全新缓存的官方在线准备，以及第二个无网络新容器命中缓存的检查；公开镜像已发布并核验匿名拉取；接下来验收新包装器的真实短信、新 Windows 安装/已有接口复用和普通应用路径。代码交付不等于整条新流程已经实测。
-2. 在维护窗口部署健康查询竞争修复并重新认证。现存旧容器未重启，修复尚未在该会话生效；原有 4/4 SSH、双向 1 MiB HTTP、UDP 与探针故障恢复证据保留，但不能替代新版验收。
-3. 分别验证 Windows 服务/系统重启、Docker 重建、缓存损坏与下载失败提示。确认只影响本实例，Stop 与 Remove 的保留/卸载语义清楚。
-
-DNS 分流、IPv6、重叠目标映射和厂商真实断线重认证继续作为独立范围，不先扩大 MVP。暂不增加常驻 Web 管理端、数据库或另一套代理协议；如果继续优化资源，先分别测量平台空闲成本和单/多实例增量。
+**新 Lite 入口的真实 UniVPN 登录和完整业务仍待验收。** 新 Full launcher 的整体流程、Windows 重启选路、真实断线重认证也继续分开验证；现存旧容器未重建，源码中的健康查询修复尚未在该会话生效。先完成这些门槛，再讨论条件 DNS、IPv6、重叠映射或新增管理界面。
