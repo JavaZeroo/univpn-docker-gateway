@@ -10,14 +10,32 @@ class ConfigTests(unittest.TestCase):
     def setUp(self):
         self.sample = json.loads(Path("examples/vpn.json").read_text())
 
-    def read(self):
+    def read(self, **kwargs):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "vpn.json"
             path.write_text(json.dumps(self.sample))
-            return load(path)
+            return load(path, **kwargs)
 
     def test_example(self):
         self.assertEqual(self.read()["port"], 443)
+
+    def test_lite_does_not_need_or_accept_wireguard_client(self):
+        self.sample["edition"] = "lite"
+        with self.assertRaises(ValueError):
+            self.read(edition="lite")
+        del self.sample["wireguard_client"]
+        self.assertEqual(self.read(edition="lite")["edition"], "lite")
+
+    def test_image_and_configuration_edition_must_agree(self):
+        self.sample["edition"] = "lite"
+        with self.assertRaises(ValueError):
+            self.read(edition="full")
+
+    def test_lite_requires_real_probe(self):
+        self.sample.pop("wireguard_client")
+        self.sample.pop("probe")
+        with self.assertRaises(ValueError):
+            self.read(edition="lite")
 
     def test_default_route_rejected(self):
         self.sample["allowed_cidrs"] = ["0.0.0.0/0"]

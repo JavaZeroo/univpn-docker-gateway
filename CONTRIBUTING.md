@@ -24,6 +24,8 @@ Python 测试使用受控对象；Windows 测试模拟系统调用，不触发 U
 
 网络改动请给出能失败的对照、完整业务响应、实际出口和恢复结果，不能只贴端口监听、网卡 Up 或 WireGuard 握手。没有对应服务时，明确标记 HTTP/UDP 尚未验证。
 
+Lite 的 `tests/socks_integration.py` 使用独立 net/mount namespace 和模拟 VPN，覆盖真实出口绑定、代理数据及禁止回落。仅在一次性 Linux 环境以 root 执行；容器测试需要独立网络/PID namespace 和特权以创建其内部测试命名空间。该测试权限不适用于日常运行，正式 Lite 只需要 `NET_ADMIN` 和 TUN。
+
 会话改动需覆盖超时、取消、单次提交与并发状态查询；不得增加凭据回显或自动重复认证。配置工具默认不覆盖现有密钥和服务，只修改本实例的网络资源，并提供单独回滚路径。
 
 更新文档时保持 README、[快速开始](docs/quickstart.md)、[架构](docs/architecture.md)和[实测记录](docs/subnet-gateway-validation.md)一致。分清模拟测试、真实验证和源代码已修复但存量容器尚未更新的状态。

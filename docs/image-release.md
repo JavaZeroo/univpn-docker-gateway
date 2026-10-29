@@ -1,10 +1,24 @@
 # 公开镜像的构建与发布
 
-当前交付为 `javazero/univpn-docker-gateway:0.3.0` 和 `:latest`，平台为 `linux/amd64`。下文保留构建、缓存和升级细节，普通用户直接看[快速开始](quickstart.md)。
+0.4.0 分为 Lite 与 Full，平台为 `linux/amd64`。普通用户从 [README](../README.md) 选择版本；本页记录构建、缓存与发布证据。
+
+| 标签 | 版本 | 内容 |
+| --- | --- | --- |
+| `lite`、`0.4.0-lite` | Lite | SOCKS5 IPv4 TCP 入口；无 WireGuard 工具和 Windows 脚本 |
+| `full`、`0.4.0-full` | Full | Windows WireGuard 原始 IPv4 接入；指定目标 TCP / UDP |
+| `latest`、`0.4.0` | Full 兼容别名 | 保留此前默认镜像的使用方式 |
+
+## 0.4.0 验证记录（2026-10-29）
+
+- 同一份认证控制器、两个 Docker 构建 target；Lite 不执行 WireGuard 或内核转发规则管理，Full 保留原有路径。
+- 192 项 Python 测试在 Windows 通过（8 项平台相关跳过）。隔离 Linux 网络测试实际验证 SOCKS5 SSH、1 MiB HTTP、真实 `SO_BINDTODEVICE`、白名单、就绪撤销/恢复，以及普通出口可用时禁止回落。VPN 在此测试中由 veth 模拟。
+- Lite 镜像已在无网络的一次性容器内完成真实 TTY 配置、0700/0600 权限检查、固定官方缓存校验及官方引擎 idle 初始化；未认证的 SOCKS 请求被拒绝，镜像内没有 `wg`、`wg-quick` 或 Windows 客户端文件。
+- 新 Lite 完整真实 VPN 认证及应用端到端接入仍待独立验收；未为发布重新触发短信或重启现存 VPN。Full 既有真实数据链路证据见[验证记录](subnet-gateway-validation.md)。
+- 镜像摘要与本次 CI 链接在发布完成后补入；以下历史摘要继续对应其各自固定标签。
 
 ## 0.3.0 发布记录（2026-10-29）
 
-- Docker Hub `0.3.0` 与 `latest` 已发布并通过匿名 manifest 核验，OCI index：`sha256:9fde5286dfef51c09c0eff3b432efbe5938a986b56f4c838ef71988efdf75209`。
+- Docker Hub `0.3.0` 与当时的 `latest` 已发布并通过匿名 manifest 核验，OCI index：`sha256:9fde5286dfef51c09c0eff3b432efbe5938a986b56f4c838ef71988efdf75209`。
 
 - 新增 Windows WireGuard 按需准备，用户只需预装 Docker Desktop；MSI 与隧道创建的 UAC 分开处理。
 - 源码 revision：`ad5d8008ca75c2eb281730e66e52281243f143ad`。镜像包含 CMD 和四个 PowerShell 文件，不包含 Windows MSI 或 UniVPN 二进制。
@@ -22,7 +36,7 @@
 
 ## 镜像包含什么
 
-[Dockerfile.public](../Dockerfile.public) 预装 Ubuntu 22.04、Python 标准库、tini、iproute2、iptables、wireguard-tools、CA，以及本项目的终端前端和 Windows 配置脚本。**不包含官方 UniVPN 安装器、引擎、厂商共享库或用户配置。** [专用构建忽略规则](../Dockerfile.public.dockerignore) 只允许自有源码、客户端脚本和项目许可证进入构建上下文，排除 `vendor/`、`private/` 和 `.env`。
+[Dockerfile.public](../Dockerfile.public) 两版共用 Ubuntu 22.04、Python 标准库、tini、iproute2、iptables、CA 和终端前端；Full 额外包含 `wireguard-tools` 和 Windows 配置脚本。**两版均不包含官方 UniVPN 安装器、引擎、厂商共享库或用户配置。** [专用构建忽略规则](../Dockerfile.public.dockerignore) 排除 `vendor/`、`private/` 和 `.env`。
 
 用户无需在本机编译镜像。默认 [compose.yml](../compose.yml) 拉取公开镜像；首次 `run` 或 `prepare` 才在用户本机容器内从官方取得固定版本，校验后复制最小运行文件。`run` 接着启动认证服务，`prepare` 到此退出；二者都不执行厂商安装器的 shell 脚本。
 
@@ -89,15 +103,25 @@ docker image load -i univpn-gateway-0.3.0.tar
 
 ```powershell
 $revision = (git rev-parse HEAD).Trim()
-docker buildx build --platform linux/amd64 -f Dockerfile.public `
-  --build-arg VERSION=0.3.0 --build-arg "REVISION=$revision" `
-  -t javazero/univpn-docker-gateway:0.3.0 `
-  -t javazero/univpn-docker-gateway:latest --load .
+foreach ($edition in @('lite', 'full')) {
+  docker buildx build --platform linux/amd64 -f Dockerfile.public --target $edition `
+    --build-arg VERSION=0.4.0 --build-arg "REVISION=$revision" `
+    -t "javazero/univpn-docker-gateway:0.4.0-$edition" `
+    -t "javazero/univpn-docker-gateway:$edition" --load .
+  if ($LASTEXITCODE -ne 0) { throw "Build failed: $edition" }
+}
 
 docker login
-docker push javazero/univpn-docker-gateway:0.3.0
+foreach ($tag in @('0.4.0-lite', 'lite', '0.4.0-full', 'full')) {
+  docker push "javazero/univpn-docker-gateway:$tag"
+  if ($LASTEXITCODE -ne 0) { throw "Push failed: $tag" }
+}
+docker tag javazero/univpn-docker-gateway:0.4.0-full javazero/univpn-docker-gateway:0.4.0
+docker tag javazero/univpn-docker-gateway:0.4.0-full javazero/univpn-docker-gateway:latest
+docker push javazero/univpn-docker-gateway:0.4.0
 docker push javazero/univpn-docker-gateway:latest
-docker buildx imagetools inspect javazero/univpn-docker-gateway:0.3.0
+docker buildx imagetools inspect javazero/univpn-docker-gateway:0.4.0-lite
+docker buildx imagetools inspect javazero/univpn-docker-gateway:0.4.0-full
 ```
 
 更新固定厂商版本须重新核对官方下载、外层 ZIP、内层 RUN、精确条目及六文件摘要，并做初始化、原生认证和数据面回归；不能只改版本字符串。公开镜像构建本身不应下载厂商包。

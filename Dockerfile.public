@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 # Public image: all open runtime dependencies and client automation, no vendor binaries.
-FROM ubuntu:22.04
+FROM ubuntu:22.04 AS common
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 iproute2 iptables wireguard-tools ca-certificates tini \
+    python3 iproute2 iptables ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
-ARG VERSION=0.3.0
+ARG VERSION=0.4.0
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="UniVPN Docker Gateway" \
       org.opencontainers.image.description="Terminal MFA and isolated IPv4 VPN gateway; official client fetched and verified on first use" \
@@ -15,10 +15,24 @@ LABEL org.opencontainers.image.title="UniVPN Docker Gateway" \
       org.opencontainers.image.revision=$REVISION
 COPY univpn_gateway /opt/gateway/univpn_gateway
 COPY scripts/vpnctl /usr/local/bin/vpnctl
-COPY scripts/univpn.cmd scripts/univpn.ps1 scripts/windows-profile.ps1 scripts/windows-gateway.ps1 scripts/windows-prerequisites.ps1 /opt/gateway/client/
 COPY LICENSE /usr/share/doc/univpn-docker-gateway/LICENSE
 RUN chmod 755 /usr/local/bin/vpnctl
 ENV USER=root HOME=/root PYTHONPATH=/opt/gateway VPN_BACKEND=native \
     LD_LIBRARY_PATH=/usr/local/UniVPN/serviceclient
 HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 CMD vpnctl status
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/bin/python3", "-m", "univpn_gateway.image_entrypoint"]
+
+# Lite: a container-owned SOCKS5 TCP entry; no Windows scripts or WG tools.
+FROM common AS lite
+ENV VPN_EDITION=lite VPN_CONFIG=/config/lite/vpn.json
+LABEL org.opencontainers.image.edition="lite"
+EXPOSE 1080/tcp
+
+# Full remains the default build and :latest compatibility target.
+FROM common AS full
+RUN apt-get update && apt-get install -y --no-install-recommends wireguard-tools \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/univpn.cmd scripts/univpn.ps1 scripts/windows-profile.ps1 scripts/windows-gateway.ps1 scripts/windows-prerequisites.ps1 /opt/gateway/client/
+ENV VPN_EDITION=full VPN_CONFIG=/config/vpn.json
+LABEL org.opencontainers.image.edition="full"
+EXPOSE 51820/udp

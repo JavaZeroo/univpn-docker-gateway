@@ -32,6 +32,11 @@ def dispatch(auth, request):
 def update_forwarding(auth, config, previous):
     """Apply the background guard's latest completed health result."""
     ready = auth.health()
+    if config.get("edition") == "lite":
+        if ready != previous:
+            print("VPN data probe ready; SOCKS requests enabled" if ready else
+                  "VPN data probe failed; SOCKS requests blocked", flush=True)
+        return ready
     if ready != previous:
         gateway.enable(config) if ready else gateway.disable()
         print("VPN data probe ready" if ready else "VPN data probe failed; forwarding blocked",
@@ -42,6 +47,7 @@ def update_forwarding(auth, config, previous):
 def main():
     os.umask(0o077)
     config = load(os.environ.get("VPN_CONFIG", "/config/vpn.json"))
+    lite = config["edition"] == "lite"
     Path("/run/univpn").mkdir(mode=0o700, parents=True, exist_ok=True)
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -49,11 +55,17 @@ def main():
     engine = None
     server = None
     worker = None
+    proxy = None
     try:
-        gateway.block()
+        if not lite:
+            gateway.block()
         engine = NativeEngine(config).start()
         auth = NativeAuth(engine, config, probe=probe)
-        if Path("/config/wg0.conf").is_file():
+        if lite:
+            from .socks_proxy import SocksProxy
+            proxy = SocksProxy(config, lambda: auth.status().get("data_plane_ready", False)).start()
+            print("Lite SOCKS5 TCP listener ready on container port 1080; authentication is still required.", flush=True)
+        elif Path("/config/wg0.conf").is_file():
             import subprocess
             path = Path("/run/univpn/wg0.conf")
             path.write_bytes(Path("/config/wg0.conf").read_bytes())
@@ -101,7 +113,10 @@ def main():
                 break
             previous = update_forwarding(auth, config, previous)
     finally:
-        gateway.disable()
+        if proxy is not None:
+            proxy.close()
+        if not lite:
+            gateway.disable()
         if server is not None:
             server.shutdown()
             server.server_close()

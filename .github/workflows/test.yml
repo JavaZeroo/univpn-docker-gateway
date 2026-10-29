@@ -18,6 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo python3 tests/network_integration.py
+      - run: sudo python3 tests/socks_integration.py
   wireguard:
     runs-on: ubuntu-24.04
     timeout-minutes: 3
@@ -37,17 +38,24 @@ jobs:
   public-image:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    strategy:
+      matrix:
+        edition: [lite, full]
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -f Dockerfile.public -t univpn-public:test .
+      - run: docker build -f Dockerfile.public --target ${{ matrix.edition }} -t univpn-public:test .
       - run: docker run --rm univpn-public:test --help
       - name: Image contains no vendor runtime or private profile
         run: docker run --rm --entrypoint sh univpn-public:test -c 'test ! -e /usr/local/UniVPN/serviceclient/UniVPNCS && test ! -e /opt/gateway/client/private'
       - name: Export client without VPN or administrator capabilities
+        if: matrix.edition == 'full'
         run: |
           mkdir -p "$RUNNER_TEMP/univpn-client"
           docker run --rm -v "$RUNNER_TEMP/univpn-client:/output" univpn-public:test export-client
           test -f "$RUNNER_TEMP/univpn-client/univpn/univpn.ps1"
+      - name: Lite contains no WireGuard tools or Windows scripts
+        if: matrix.edition == 'lite'
+        run: docker run --rm --entrypoint sh univpn-public:test -c '! command -v wg && ! command -v wg-quick && test ! -d /opt/gateway/client'
   windows-prerequisites:
     runs-on: windows-latest
     timeout-minutes: 5

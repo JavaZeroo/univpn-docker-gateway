@@ -1,0 +1,27 @@
+services:
+  vpn:
+    image: javazero/univpn-docker-gateway:lite
+    command: serve
+    cap_add: [NET_ADMIN]
+    devices: [/dev/net/tun:/dev/net/tun]
+    ports: ["127.0.0.1:1080:1080/tcp"]
+    volumes:
+      - lite-config:/config
+      - vendor-cache:/var/cache/univpn
+    tmpfs:
+      - /run
+      - /tmp
+      - /root/UniVPN:mode=0700
+      - /usr/local/UniVPN/log:mode=0700
+      - /usr/local/UniVPN/serviceclient/log:mode=0700
+    stdin_open: true
+    tty: true
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 128
+    restart: "no"
+    logging:
+      driver: none
+volumes:
+  lite-config:
+  vendor-cache:

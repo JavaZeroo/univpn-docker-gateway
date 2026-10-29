@@ -26,6 +26,17 @@ class Engine:
 
 
 class NativeServiceTests(unittest.TestCase):
+    def test_lite_health_never_manages_wireguard_forwarding(self):
+        auth = Mock()
+        auth.health.side_effect = (True, False)
+        with patch("univpn_gateway.native_service.gateway.enable") as enable, \
+                patch("univpn_gateway.native_service.gateway.disable") as disable, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(update_forwarding(auth, {"edition": "lite"}, False))
+            self.assertFalse(update_forwarding(auth, {"edition": "lite"}, True))
+            enable.assert_not_called()
+            disable.assert_not_called()
+
     def authenticated(self):
         engine = Engine()
         config = {"gateway": "vpn.example.com", "port": 443}

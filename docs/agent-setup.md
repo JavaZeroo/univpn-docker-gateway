@@ -1,24 +1,39 @@
 # Agent 部署指南
 
-适用于 Windows 主机上的本地 Agent。使用公开预构建镜像，自动完成环境检查、配置生成、启动和验收；账号密码、短信及系统授权由用户参与。普通用户入口见[README](../README.md)。
+适用于能操作 Windows 本机终端的 Agent。先选择版本，再准备公开镜像；账号、密码、短信只在真实交互 TTY 输入，系统授权由用户确认。[普通用户入口](../README.md)
 
-## 1. 先检查现状，补齐连接参数
+## 1. 确认版本与连接范围
 
-检查 Windows x64 的 Docker Desktop 是否运行 Linux 容器、Compose 是否可用。缺少 Docker 时按[官方说明](https://docs.docker.com/desktop/setup/install/windows-install/)完成准备。WireGuard 交由启动器按需安装；有效安装直接复用，部分安装或已有异常服务先诊断，不升级或修复既有客户端。不要另外安装 Git、Python 或构建镜像。
+先问用户：需要 **Lite 应用 SOCKS5 代理**，还是 **Full 按原始 IP 透明接入**？应用支持代理且只用 IPv4 TCP 时可选 Lite；需要 UDP 或无需逐应用设置时选 Full。不要替用户安装不需要的 WireGuard。
 
-一次收集缺少的非凭据参数：网关 `host:port`、明确目标 IPv4 CIDR、其中一台真实 SSH 探针的 IP/端口，以及实例名。示例中的地址均需替换，不根据网关地址推测目标网段。
+一次补齐网关 `host:port`、明确的目标 IPv4 CIDR、其中一台真实 SSH 探针 IP/端口、实例名。目标由用户确认，不从网关地址推测，更不能扩大成默认路由。检查 Windows x64 的 Docker Desktop 是否运行 Linux 容器；Full 还需要 Compose。无需 Git、Python 或本机构建。
 
-先检查当前目录是否已有导出的 `univpn`，以及 `univpn/private/<名称>/profile.json`。已有 profile 时重用它，不重新 Init 或生成密钥。新实例使用不冲突的名称、本机 UDP 端口和私有 `/30` 接入网段；检查现有 VPN、Docker 网络、端口和网卡。目标范围由用户确认，不能扩大成默认路由。
+标签 `lite` / `full` 对应两个版本，`0.4.0-lite` / `0.4.0-full` 可固定版本；`latest` 与 `0.4.0` 仍是 Full。两版共用认证控制器，能力与验收范围不能混报。
 
-## 2. 导出启动器，非交互生成配置
+## 2A. Lite：容器终端完成配置和登录
 
-在用户选定的本地工作目录执行；已有导出目录时跳过此步：
+确认本机端口、容器名及配置卷不冲突，在真实 TTY 执行 [Lite 单条启动命令](lite.md#首次连接)。首次 wizard 只问网络参数，配置保存到 named volume 的 `/config/lite/vpn.json`；随后同一终端登录并前台运行。无需导出脚本或准备 Windows WireGuard。
+
+Agent 无法提供用户可输入凭据的 TTY 时，把启动命令交给用户自己的终端，完成后再检查；不要代收凭据或伪造输入。`Ctrl+C` 停止，配置和已验证缓存保留。没有有效配置的后台启动不能替代首次 wizard。
 
 ```powershell
-docker run --rm -v "${PWD}:/output" javazero/univpn-docker-gateway:0.3.0 export-client
+docker exec univpn-lite vpnctl status
+curl.exe --proxy socks5h://127.0.0.1:1080 http://10.80.0.11:8080/
 ```
 
-将已确认参数写入 `univpn/private/vpn-source-lab.json`（可创建 `private` 父目录），例如：
+以用户已有的服务替换 HTTP 示例，不擅自部署测试服务。核对 `data_plane_ready: true`，再用实际应用的 SOCKS5 路径发请求；裸 SSH、HTTP 直连或宿主机路由都不能证明 Lite 代理可用。仅支持数字 IPv4 TCP，不能报告 UDP、IPv6 或域名解析已通过。
+
+## 2B. Full：生成配置，再由用户完成认证与授权
+
+检查已有 profile、VPN、Docker 网络、端口与网卡。已有 `univpn/private/<名称>/profile.json` 时复用它，不重新 Init 或生成密钥。新实例使用不同名称、UDP 端口和私有 `/30` 接入网段。
+
+在选定的空工作目录导出 Full 启动器：
+
+```powershell
+docker run --rm -v "${PWD}:/output" javazero/univpn-docker-gateway:full export-client
+```
+
+将已确认的非凭据参数写入 `univpn/private/vpn-source-lab.json`（可创建 `private` 父目录）：
 
 ```json
 {
@@ -29,53 +44,34 @@ docker run --rm -v "${PWD}:/output" javazero/univpn-docker-gateway:0.3.0 export-
 }
 ```
 
-文件只保存连接参数，不含账号、密码或 OTP。将源 JSON 放在目标 profile 目录外；不要预先创建 `univpn/private/lab`，Init 会拒绝已有目录。自签证书需要独立核验后填写 `approved_certificate_sha256`，沿用现有[证书策略](native-rpc-research.md)。
-
-下面示例从导出目录的父目录运行；端口与网段需先确认不冲突：
+源 JSON 放在目标 profile 目录外，不提前创建 `univpn/private/lab`。自签证书只有独立核验后才填写 `approved_certificate_sha256`，不全局关闭检查。[证书边界](native-rpc-research.md)
 
 ```powershell
-.\univpn\univpn.cmd -Mode Init -Name lab -GatewayConfig .\univpn\private\vpn-source-lab.json -Image javazero/univpn-docker-gateway:0.3.0 -UdpPort 51829 -AccessSubnet 10.203.0.0/30
-```
-
-Init 会先检查 WireGuard，完全缺失时下载固定官方 MSI、校验摘要与签名并请求安装授权；再生成受限的 profile、双端密钥和 Compose，执行只读 Plan。Init 不登录 VPN、不创建隧道网卡，但首次依赖安装会修改 Windows。无需手填 WireGuard 公私钥或单独维护 AllowedIPs。后续操作从保存的元数据读取端口、地址和镜像，通常只需实例名。
-
-已有 profile 的独立只读预检使用以下脚本，`univpn.cmd` 没有 Plan 模式：
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\univpn\windows-profile.ps1 -Mode Plan -Name lab
-```
-
-## 3. 连接并保留当前认证会话
-
-先确认工具能提供真实交互 TTY、让用户输入凭据；不具备此能力时，完成 Init 后把下面的命令交给用户终端执行，再继续验收。
-
-```powershell
+.\univpn\univpn.cmd -Mode Init -Name lab -GatewayConfig .\univpn\private\vpn-source-lab.json -Image javazero/univpn-docker-gateway:full -UdpPort 51829 -AccessSubnet 10.203.0.0/30
 .\univpn\univpn.cmd -Name lab
 ```
 
-Connect 会启动本实例、等待首次官方组件获取/缓存准备、登录或续交短信、安装或复用专属 Windows 网卡，并检查一个真实目标 banner。只有 `idle` 才发起登录，`awaiting_sms` 续交当前挑战；不要为了获取验证码反复执行登录。
+Init 按需准备官方 Windows WireGuard、生成受限 profile、双端密钥和 Compose，再执行只读 Plan；Init 不登录或创建 tunnel，但首次依赖安装会修改 Windows。已有有效签名安装会复用，不升级或修复旧客户端。Connect 启动本实例、等待厂商组件获取/缓存、登录或续交短信，再安装或核验专属网卡。
 
-登录需要真实 TTY。Agent 的工具若不能让用户在交互终端输入凭据，就完成 Init 后，将上面的 Connect 命令交给用户在自己的终端执行，再继续检查状态。不要把密码/验证码塞进命令参数、环境变量、JSON、管道或日志；不要用 `-T` 执行交互登录。WireGuard 安装与隧道创建可能分别触发 UAC，由用户在系统弹窗确认；不能承诺只有一次。3010 表示依赖安装需要重启，应停下告知用户，不自动重启或继续宣称已就绪。
+没有真实 TTY 时完成 Init 后，把 Connect 命令交给用户终端。WireGuard 安装与专属 tunnel 创建可能分别要求 UAC，不能承诺只有一次；3010 表示需要重启，应告知用户，不自动重启或继续宣称就绪。只改 `univpn-*` 本实例，不能删除其他 VPN 或路由以求连通。
 
-失败、过期或取消的会话需要用户明确发起新尝试；届时仅对本实例 Stop 后再 Connect，不后台重试或自动重发短信。已有异常同名网卡会拒绝覆盖，应先诊断并向用户说明，不删除其他 VPN 以求连通。
-
-## 4. 验收后再报告成功
+已有 profile 的只读预检及实际验收：
 
 ```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\univpn\windows-profile.ps1 -Mode Plan -Name lab
 .\univpn\univpn.cmd -Name lab -Mode Status
 Find-NetRoute -RemoteIPAddress 10.80.0.11
 & "$env:ProgramFiles\WireGuard\wg.exe" show univpn-lab
 ```
 
-检查 `data_plane_ready: true`、目标最佳路由属于 `univpn-lab`、近期握手和增长的收发计数。Status 命令本身退出成功、容器 Up 或网卡存在，都不能代替这些检查。
+`univpn.cmd` 没有 Plan 模式。核对 `data_plane_ready: true`、目标最佳路由属于 `univpn-lab`、近期握手和增长的收发计数，再做实际业务请求，例如 `curl.exe --noproxy "*" http://10.80.0.11:8080/`。Connect 的单个 SSH banner 不能证明所有目标、HTTP 或 UDP 都已通过。
 
-Connect 自带 Windows 普通 TCP banner 检查。再按用户的实际服务做请求；例如已有 HTTP 服务时用 `curl.exe --noproxy "*" http://10.80.0.11:8080/` 排除应用代理，不为了测试擅自部署服务。一个 SSH 探针不能证明所有目标、HTTP、UDP 都通过。
+## 3. 认证、停止和报告边界
 
-报告实例名、配置位置、实际选路、已通过的业务及未验证项；若仍在等用户输入或授权，明确报告等待阶段。只改本实例命名资源，保留其他 VPN、网卡、密钥及认证会话；不使用 host 网络或接管默认路由。
+两版都不把密码或 OTP 放入命令参数、环境变量、JSON、管道或日志；交互认证不要加 `-T`。`awaiting_sms` 使用现有挑战续交，不能反复 `login` 触发短信；失败、过期或取消后，仅由用户明确发起本实例的新尝试。
 
-## 停止与移除
+- **Lite：** 前台 `Ctrl+C` 停止；容器使用 `--rm`，网络配置和厂商缓存卷仍保留。需另一套 VPN 时另选名称、配置卷和本机代理端口。
+- **Full Stop：** `-Mode Stop` 只停本实例容器，保留网卡、路由、密钥和缓存，目标可能仍指向该入口。
+- **Full Remove：** `-Mode Remove` 卸载本实例 Windows tunnel 并执行 Compose down，仍保留密钥文件和缓存卷。
 
-- `-Mode Stop`：停本实例容器，保留专属网卡、路由、密钥和缓存，目标可能继续指向该不可用入口。
-- `-Mode Remove`：卸载本实例 Windows tunnel 并执行 Compose down，仍保留密钥文件和缓存卷。
-
-仅在用户请求停止或移除对应实例时执行。更多边界见[快速开始](quickstart.md)、[架构](architecture.md)和[镜像说明](image-release.md)。
+停止、移除或新认证尝试需要用户授权，不后台重试或自动重发短信。容器 Up、登录成功或状态命令返回成功，不能代替真实请求；Full 还需证明流量确实经过新网卡，Lite 需证明使用代理。报告版本、实例、配置位置、实际通过的业务与未验证项。Docker Desktop / WSL2 的平台开销也需保留在资源说明中。

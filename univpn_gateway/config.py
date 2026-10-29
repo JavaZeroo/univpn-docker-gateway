@@ -1,11 +1,16 @@
 import ipaddress
 import json
+import os
 import re
 from pathlib import Path
 
 
-def load(path):
+def load(path, *, edition=None):
     data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    selected = edition or os.environ.get("VPN_EDITION", "full")
+    if selected not in ("lite", "full") or data.get("edition", selected) != selected:
+        raise ValueError("configuration and image editions must match")
+    data["edition"] = selected
     gateway = data["gateway"]
     if not re.fullmatch(r"[a-zA-Z0-9.-]+", gateway):
         raise ValueError("gateway must be an IPv4 address or DNS name")
@@ -18,12 +23,18 @@ def load(path):
     networks = [ipaddress.IPv4Network(n, strict=True) for n in data["allowed_cidrs"]]
     if not networks or any(n.prefixlen == 0 for n in networks):
         raise ValueError("explicit non-default IPv4 destinations are required")
-    client = ipaddress.IPv4Interface(data["wireguard_client"])
-    if client.network.prefixlen != 32:
-        raise ValueError("wireguard_client must be a single /32 address")
-    if any(client.ip in n for n in networks):
-        raise ValueError("WireGuard client address overlaps target destinations")
+    if selected == "full":
+        client = ipaddress.IPv4Interface(data["wireguard_client"])
+        if client.network.prefixlen != 32:
+            raise ValueError("wireguard_client must be a single /32 address")
+        if any(client.ip in n for n in networks):
+            raise ValueError("WireGuard client address overlaps target destinations")
+        data["wireguard_client"] = str(client)
+    elif "wireguard_client" in data:
+        raise ValueError("lite configuration must not contain WireGuard settings")
     probe = data.get("probe")
+    if selected == "lite" and not probe:
+        raise ValueError("lite requires a real target banner probe")
     if probe:
         host = ipaddress.IPv4Address(probe["host"])
         if not any(host in n for n in networks):
@@ -42,5 +53,5 @@ def load(path):
             raise ValueError("invalid " + key)
         data[key] = value
     data.update(port=port, vpn_interface=interface,
-                allowed_cidrs=[str(n) for n in networks], wireguard_client=str(client))
+                allowed_cidrs=[str(n) for n in networks])
     return data
