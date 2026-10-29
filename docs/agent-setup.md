@@ -4,7 +4,9 @@
 
 ## 1. 确认版本与连接范围
 
-先问用户：需要 **Lite 应用 SOCKS5 代理**，还是 **Full 按原始 IP 透明接入**？应用支持代理且只用 IPv4 TCP 时可选 Lite；需要 UDP 或无需逐应用设置时选 Full。不要替用户安装不需要的 WireGuard。
+先了解用户准备通过 SSH、浏览器还是其他应用访问内网。希望像普通 VPN 一样直接填写 IP 时优先推荐 **Full**；明确不希望安装 Windows 网络组件、且接受逐应用配置代理时选择 **Lite**。先解释取舍，再确认方案，不要求用户预先理解协议。不要替用户安装不需要的 WireGuard。
+
+[博客](https://blog.javazero.top/2026/10/19/docker-vpn-ssh-remote-dev/)提供版本对比、SSH / 网页示例和资源边界。Lite 的 Windows OpenSSH 示例需要额外的 Ncat；支持 SOCKS5 的图形客户端可以在会话中配置。根据用户实际应用验证，不把代理端口监听当作 SSH 或浏览器已可使用。
 
 一次补齐网关 `host:port`、明确的目标 IPv4 CIDR、其中一台真实 SSH 探针 IP/端口、实例名。目标由用户确认，不从网关地址推测，更不能扩大成默认路由。检查 Windows x64 的 Docker Desktop 是否运行 Linux 容器；Full 还需要 Compose。无需 Git、Python 或本机构建。
 
