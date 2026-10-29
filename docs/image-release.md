@@ -1,6 +1,14 @@
 # 公开镜像的构建与发布
 
-发布目标为 `javazero/univpn-docker-gateway:0.2.0` 和 `:latest`，平台为 `linux/amd64`。本页是交付方式与命令模板，不代替实际发布记录：镜像 digest、推送结果、新镜像的真实短信认证和新 Windows 隧道安装，须分别以对应验收结果为准。
+已发布 `javazero/univpn-docker-gateway:0.2.0` 和 `:latest`，平台为 `linux/amd64`。下文保留构建、缓存和升级细节，普通用户直接看[快速开始](quickstart.md)。
+
+## 0.2.0 发布记录（2026-10-29）
+
+- 两个公开标签指向同一 OCI index：`sha256:7d51acf542116f6d01eeda6645ee04cd7d646e35939d39382263fa033b168e25`。
+- 镜像源码 revision：`006ce32659cf479acc4b264c975ec4f05bb649ed`；Linux/amd64 层压缩合计 43,671,687 字节，约 44 MB 下载，不代表运行内存。
+- 已通过匿名 Registry manifest/配置校验，并用空凭据配置实际执行 Docker CLI pull；不需要 Docker Hub 登录即可取得镜像。
+- 真实验收包含冷缓存官方下载、无网络新容器复用缓存、隔离官方引擎启动并停在未认证的 idle 状态，以及镜像导出 CMD 的实际密钥生成/只读 Plan/Compose 校验。
+- 新入口完整短信认证、新建 Windows 网卡与最终业务检查仍未作为整体真实验收；原有链路证据和新包装器模拟测试分开报告。现存 VPN 未重启。
 
 ## 镜像包含什么
 
@@ -61,7 +69,7 @@ docker image load -i univpn-gateway-0.2.0.tar
 
 ## 维护者发布模板
 
-以下命令会构建、登录并推送，只供有仓库发布权限的维护者显式执行；本文没有执行它们。发布前先运行相应测试，并确认镜像不含厂商文件、私有配置和凭据。`latest` 可变；需要精确复现时，记录实际发布后的 digest，不能以本地 image ID 代替。
+以下为本轮发布所用流程的可复现模板，只供有仓库发布权限的维护者显式执行。发布前先运行相应测试，并确认镜像不含厂商文件、私有配置和凭据。`latest` 可变；需要精确复现时，记录实际发布后的 digest，不能以本地 image ID 代替。
 
 ```powershell
 $revision = (git rev-parse HEAD).Trim()
