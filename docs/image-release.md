@@ -2,6 +2,16 @@
 
 当前交付为 `javazero/univpn-docker-gateway:0.3.0` 和 `:latest`，平台为 `linux/amd64`。下文保留构建、缓存和升级细节，普通用户直接看[快速开始](quickstart.md)。
 
+## 0.3.0 发布记录（2026-10-29）
+
+- Docker Hub `0.3.0` 与 `latest` 已发布并通过匿名 manifest 核验，OCI index：`sha256:9fde5286dfef51c09c0eff3b432efbe5938a986b56f4c838ef71988efdf75209`。
+
+- 新增 Windows WireGuard 按需准备，用户只需预装 Docker Desktop；MSI 与隧道创建的 UAC 分开处理。
+- 源码 revision：`ad5d8008ca75c2eb281730e66e52281243f143ad`。镜像包含 CMD 和四个 PowerShell 文件，不包含 Windows MSI 或 UniVPN 二进制。
+- [7 项 CI 检查通过](https://github.com/JavaZeroo/univpn-docker-gateway/actions/runs/40811966051)，其中一次性 Windows runner 实际运行官方 MSI，返回 `Status=Installed, Ready=true, Reused=false, RestartRequired=false`。
+- 本机真实检查走 `Existing / Reused=true`，未重装或升级正在使用的 WireGuard；镜像导出的 CMD 已实际完成 Init、真实密钥生成和 Compose 预检。
+- 27 项前置依赖检查覆盖错误摘要/签名、部分安装、提权、受保护副本及 3010 分支；非管理员 UAC 点击本身仍是模拟覆盖，未为此修改本机既有客户端。新入口整体真实短信与网络接入仍另行验收。
+
 ## 0.2.0 发布记录（2026-10-29）
 
 - 0.2.0 发布时，该版本与当时 latest 指向同一 OCI index（latest 为可变标签）：`sha256:7d51acf542116f6d01eeda6645ee04cd7d646e35939d39382263fa033b168e25`。
