@@ -18,7 +18,10 @@ def export_client(destination, source=Path("/opt/gateway/client")):
     source = Path(source)
     if any(not (source / name).is_file() for name in CLIENT_FILES):
         raise ValueError("image client files are incomplete")
-    destination.mkdir(mode=0o700, parents=False)
+    # Exported files are public launchers. Native Linux bind mounts retain the
+    # container's root ownership, so the host user must be able to read them.
+    # The profile generator restricts its separate private directory before keys.
+    destination.mkdir(mode=0o755, parents=False)
     try:
         for name in CLIENT_FILES:
             shutil.copyfile(source / name, destination / name)
