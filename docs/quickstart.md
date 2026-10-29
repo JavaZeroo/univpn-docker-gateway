@@ -1,25 +1,27 @@
 # 快速开始
 
-需要 Windows、运行中的 Docker Desktop（Linux 容器 / WSL2）及 [WireGuard for Windows](https://www.wireguard.com/install/)。不需要 Git、Python 或本机构建。
+先安装并启动 Windows x64 的 [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/)（Linux 容器 / WSL2）。启动器会按需安装官方 WireGuard；已安装且签名有效时直接复用，不升级。无需 Git、Python 或本机构建。
 
 希望交给本机 Agent 操作时，使用[Agent 部署指南](agent-setup.md)；它支持先生成配置，再由用户完成终端认证。
 
 ## 首次连接：两条命令
 
-在保存配置的目录打开 PowerShell：
+在 Windows 新建空文件夹，在该文件夹打开 PowerShell：
 
 ```powershell
 docker run --rm -v "${PWD}:/output" javazero/univpn-docker-gateway:latest export-client
 .\univpn\univpn.cmd
 ```
 
-依次填写网关（如 `vpn.example.com:443`）、目标 CIDR（如 `10.80.0.11/32`）和用于检查真实连通的 SSH 服务器。随后在终端输入 VPN 账号、密码与本次短信；首次安装专属 Windows 网卡需要一次 UAC 确认。
+第一条将启动器导出到当前 Windows 文件夹的 `univpn` 子目录；第二条在同一个 PowerShell 窗口运行这个 `.cmd` 脚本。`.\` 表示当前文件夹，全部命令在 Windows 执行。
+
+依次填写网关（如 `vpn.example.com:443`）、目标 CIDR（如 `10.80.0.11/32`）和用于检查真实连通的 SSH 服务器。随后在终端输入 VPN 账号、密码与本次短信；安装 WireGuard 和创建专属 Windows 网卡可能分别需要 UAC 确认。若系统要求重启，先完成重启，再继续连接；启动器不会自动重启电脑。
 
 启动器自动生成双端密钥与配置、启动容器、等待官方组件准备、保留短信会话、安装或复用本实例网卡，并验证 Windows 到目标的实际 banner。探针用 SSH，转发也支持 HTTP 和 UDP。
 
 镜像首次从官方下载并校验固定版本组件，约 30 MB；以后使用 Docker 卷中的已验证缓存。私钥留在受限目录，账号密码和验证码不写配置。当前支持 Linux amd64 / UniVPN **10781.21.0.0831**。
 
-## 以后只运行启动器
+## 连接后的常用命令
 
 ```powershell
 .\univpn\univpn.cmd                   # 连接；已有短信挑战会续交
@@ -40,9 +42,12 @@ docker run --rm -v "${PWD}:/output" javazero/univpn-docker-gateway:latest export
 
 以后加 `-Name work` 即可操作该实例；端口和网段已保存。远端目的 IP 重叠时不能靠容器隔离同时区分。
 
+## Windows 安装范围
+
+WireGuard 位于 Windows 的标准安装目录 `C:\Program Files\WireGuard`；`univpn-*` 是独立的隧道服务与网卡。容器内的 `wg0` 是另一端的 Linux 接口。启动器不停止或重装既有 WireGuard；部分安装、异常同名服务会先报错。目标 CIDR 重叠时仍会影响实际选路。
+
 ## 遇到问题
 
-- **已有导出目录：** 不要重复导出；直接运行已有启动器，避免覆盖配置。所有配置在 `univpn/private/<名称>/`。
 - **短信过期或失败：** 不自动重发；显式 `Stop` 后重新连接。存在有效挑战时会执行 `sms`，不会重复 `login`。
 - **证书不受信任：** 独立核实叶证书 SHA256 后，写入本实例 `vpn.json` 的 `approved_certificate_sha256`，再显式重新连接。不全局关闭检查。[证书边界](native-rpc-research.md)
 - **已有网关 JSON：** 首次运行可加 `-GatewayConfig .\vpn.json`，保留其网关、目标、探针和已核验的证书配置。

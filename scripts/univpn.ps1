@@ -24,6 +24,7 @@ if ([string]::IsNullOrWhiteSpace($RootDirectory)) { $RootDirectory=$PSScriptRoot
 $script:UVPNClientDotSourced=$MyInvocation.InvocationName -eq '.'
 $script:UVPNClientOptions=@{Action=$Mode;ProfileName=$Name;Root=$RootDirectory;Config=$GatewayConfig;ProfileImage=$Image;Subnet=$AccessSubnet;Port=$UdpPort}
 . (Join-Path $PSScriptRoot 'windows-profile.ps1')
+. (Join-Path $PSScriptRoot 'windows-prerequisites.ps1')
 
 function Invoke-UVPNDocker {
     param([string[]]$Arguments)
@@ -125,6 +126,7 @@ function Test-UVPNApplicationProbe($Probe) {
 function Invoke-UVPNClient {
     param([string]$Action,[string]$ProfileName,[string]$Root,[string]$Config,[string]$ProfileImage,[string]$Subnet,[int]$Port)
     if ($ProfileName -cnotmatch '^[a-z][a-z0-9-]{0,23}$') { throw 'Invalid profile name.' }
+    if ($Action -in @('Connect','Init')) { $null=Ensure-UVPNWireGuard }
     $directory=Join-Path (Join-Path $Root 'private') $ProfileName
     $metadataPath=Join-Path $directory 'profile.json'
     if (-not (Test-Path -LiteralPath $metadataPath)) {

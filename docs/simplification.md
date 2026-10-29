@@ -17,17 +17,31 @@
 
 ## 用户现在面对的入口
 
-准备 Docker Desktop 的 Linux 容器环境及官方 Windows WireGuard 后，首次导出客户端到新目录，运行 `univpn.cmd`。用户仍需提供网关、明确目标、真实 banner 探针，并在终端输入账号密码和短信；新建 Windows 接口时处理一次 UAC。CMD 只为本次 PowerShell 进程设置执行策略，不改持久策略。
+首次只需预装 Docker Desktop 的 Linux 容器环境；导出客户端到新空目录后，在同一个 Windows PowerShell 中运行 `univpn.cmd`。0.3.0 的 Windows 引导会复用有效 WireGuard 安装，仅完全缺失时才校验官方固定 MSI 并安装；用户不需要手动安装它。用户仍需提供网关、明确目标、真实 banner 探针，并在终端输入账号密码和短信；WireGuard 安装与新建 Windows 接口可能分别要求 UAC。CMD 只为本次 PowerShell 进程设置执行策略，不改持久策略。
 
 | 动作 | 当前语义 |
 | --- | --- |
-| `Init` | 只准备 profile 与 Plan，不启动 VPN、不安装网卡；拒绝覆盖已有密钥 |
+| `Init` | 检查/准备宿主机 WireGuard，再生成 profile 与 Plan；不登录 VPN 或创建隧道网卡，拒绝覆盖已有密钥 |
 | `Connect` | 默认动作；缺 profile 才初始化；等待容器就绪，按当前认证状态登录或续交 SMS；检查路由与一个真实 TCP banner |
 | `Status` | 查看容器认证/就绪状态与 Windows 当前最佳路由；不重新登录 |
 | `Stop` | 只停止本实例容器，保留 Windows tunnel、密钥与缓存；目标路由可能继续指向不可用入口 |
 | `Remove` | 卸载本实例 Windows tunnel，再 `compose down`；保留 profile 文件和缓存卷 |
 
 这减少了手工文件配对和命令拼接，但没有首次使用耗时的前后对照，不能承诺“几分钟完成”或按入口数量计算提速。Connect 的最终检查是配置中的一个 TCP banner，完整 HTTP/UDP、全部目标和故障恢复仍需对应业务验收。
+
+## 能否只运行一个容器
+
+这里区分“少装一个软件”和“同样支持 Windows 普通应用按原始 IP 访问”。0.3.0 已省去用户手动装 WireGuard 的步骤，但仍会在 Windows 建立网络入口。
+
+| 方式 | Windows 额外准备 | 访问范围 | 本项目状态 |
+| --- | --- | --- | --- |
+| 程序也在 VPN 容器或共享其网络的容器里 | 可只用 Docker | 容器内应用使用 VPN，Windows 应用不会自动获得相同路由 | Docker 平台能力；当前启动器未封装独立容器工作流 |
+| 容器提供 HTTP/SOCKS 代理 | 应用设置代理，SSH 还需相应代理入口 | 取决于应用和代理协议，不能直接等同所有 TCP/UDP/系统 DNS | 当前镜像未提供代理模式，不能按已有功能宣传 |
+| Windows 普通应用按目标原始 IP 访问 | 宿主机网卡与路由；当前由启动器准备 WireGuard | 已配置 IPv4 目标的 SSH、HTTP、UDP 等 | 当前采用的路径 |
+
+[Docker Desktop 网络限制](https://docs.docker.com/desktop/features/networking/networking-how-tos/#known-limitations)说明 Linux bridge 不直接暴露给 Windows 宿主机；[Desktop host networking](https://docs.docker.com/engine/network/drivers/host/#limitations)是 L4 能力，不能据此让 Windows 自动得到容器 VPN 路由。因此只启动一个 Linux 容器，不能完整实现第三行的用户体验。自动安装宿主机组件可以减少人工步骤，但仍是 Windows 引导程序的行为。
+
+独立 `univpn-*` 服务保护已有隧道配置；已安装 WireGuard 时不再运行 MSI。目标 CIDR 与旧隧道重叠，仍会参与 Windows 选路，必须实查，不能宣称完全无影响。
 
 ## 保留哪些依赖，为什么
 

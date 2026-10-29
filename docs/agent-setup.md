@@ -4,7 +4,7 @@
 
 ## 1. 先检查现状，补齐连接参数
 
-检查 Docker Desktop 是否运行 Linux 容器、Compose 是否可用，以及 Windows WireGuard 是否已安装。缺少依赖时使用[Docker 官方安装说明](https://docs.docker.com/desktop/setup/install/windows-install/)或[WireGuard 官方安装器](https://www.wireguard.com/install/)，按本机权限完成准备；不要另外安装 Git、Python 或构建镜像。
+检查 Windows x64 的 Docker Desktop 是否运行 Linux 容器、Compose 是否可用。缺少 Docker 时按[官方说明](https://docs.docker.com/desktop/setup/install/windows-install/)完成准备。WireGuard 交由启动器按需安装；有效安装直接复用，部分安装或已有异常服务先诊断，不升级或修复既有客户端。不要另外安装 Git、Python 或构建镜像。
 
 一次收集缺少的非凭据参数：网关 `host:port`、明确目标 IPv4 CIDR、其中一台真实 SSH 探针的 IP/端口，以及实例名。示例中的地址均需替换，不根据网关地址推测目标网段。
 
@@ -15,7 +15,7 @@
 在用户选定的本地工作目录执行；已有导出目录时跳过此步：
 
 ```powershell
-docker run --rm -v "${PWD}:/output" javazero/univpn-docker-gateway:0.2.0 export-client
+docker run --rm -v "${PWD}:/output" javazero/univpn-docker-gateway:0.3.0 export-client
 ```
 
 将已确认参数写入 `univpn/private/vpn-source-lab.json`（可创建 `private` 父目录），例如：
@@ -34,10 +34,10 @@ docker run --rm -v "${PWD}:/output" javazero/univpn-docker-gateway:0.2.0 export-
 下面示例从导出目录的父目录运行；端口与网段需先确认不冲突：
 
 ```powershell
-.\univpn\univpn.cmd -Mode Init -Name lab -GatewayConfig .\univpn\private\vpn-source-lab.json -Image javazero/univpn-docker-gateway:0.2.0 -UdpPort 51829 -AccessSubnet 10.203.0.0/30
+.\univpn\univpn.cmd -Mode Init -Name lab -GatewayConfig .\univpn\private\vpn-source-lab.json -Image javazero/univpn-docker-gateway:0.3.0 -UdpPort 51829 -AccessSubnet 10.203.0.0/30
 ```
 
-Init 会生成受限的 profile、双端密钥和 Compose，并执行只读 Plan，不启动 VPN、不安装网卡。无需手填 WireGuard 公私钥或单独维护 AllowedIPs。后续操作从保存的元数据读取端口、地址和镜像，通常只需实例名。
+Init 会先检查 WireGuard，完全缺失时下载固定官方 MSI、校验摘要与签名并请求安装授权；再生成受限的 profile、双端密钥和 Compose，执行只读 Plan。Init 不登录 VPN、不创建隧道网卡，但首次依赖安装会修改 Windows。无需手填 WireGuard 公私钥或单独维护 AllowedIPs。后续操作从保存的元数据读取端口、地址和镜像，通常只需实例名。
 
 已有 profile 的独立只读预检使用以下脚本，`univpn.cmd` 没有 Plan 模式：
 
@@ -55,7 +55,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\univpn\windows-profile
 
 Connect 会启动本实例、等待首次官方组件获取/缓存准备、登录或续交短信、安装或复用专属 Windows 网卡，并检查一个真实目标 banner。只有 `idle` 才发起登录，`awaiting_sms` 续交当前挑战；不要为了获取验证码反复执行登录。
 
-登录需要真实 TTY。Agent 的工具若不能让用户在交互终端输入凭据，就完成 Init 后，将上面的 Connect 命令交给用户在自己的终端执行，再继续检查状态。不要把密码/验证码塞进命令参数、环境变量、JSON、管道或日志；不要用 `-T` 执行交互登录。首次网卡安装所需的 UAC 由用户在系统弹窗确认。
+登录需要真实 TTY。Agent 的工具若不能让用户在交互终端输入凭据，就完成 Init 后，将上面的 Connect 命令交给用户在自己的终端执行，再继续检查状态。不要把密码/验证码塞进命令参数、环境变量、JSON、管道或日志；不要用 `-T` 执行交互登录。WireGuard 安装与隧道创建可能分别触发 UAC，由用户在系统弹窗确认；不能承诺只有一次。3010 表示依赖安装需要重启，应停下告知用户，不自动重启或继续宣称已就绪。
 
 失败、过期或取消的会话需要用户明确发起新尝试；届时仅对本实例 Stop 后再 Connect，不后台重试或自动重发短信。已有异常同名网卡会拒绝覆盖，应先诊断并向用户说明，不删除其他 VPN 以求连通。
 

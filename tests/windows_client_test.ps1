@@ -12,6 +12,7 @@ $script:Count=1
 $script:Fixture=Join-Path ([IO.Path]::GetTempPath()) ('univpn-client-test-'+[Guid]::NewGuid().ToString('N'))
 $null=New-Item -ItemType Directory -Path $script:Fixture
 function Assert-Client($Condition,[string]$Message) { if (-not $Condition) { throw $Message } }
+function Ensure-UVPNWireGuard { return [pscustomobject]@{Reused=$true} }
 function Invoke-UVPNDocker { param([string[]]$Arguments) $script:DockerCalls.Add(($Arguments -join '|')) }
 function Wait-UVPNRuntime($Compose) { $script:Waited=$true }
 function Get-UVPNContainerState($Compose) {

@@ -8,4 +8,5 @@
 !scripts/univpn.cmd
 !scripts/windows-profile.ps1
 !scripts/windows-gateway.ps1
+!scripts/windows-prerequisites.ps1
 !LICENSE

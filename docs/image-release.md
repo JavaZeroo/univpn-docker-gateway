@@ -1,10 +1,10 @@
 # 公开镜像的构建与发布
 
-已发布 `javazero/univpn-docker-gateway:0.2.0` 和 `:latest`，平台为 `linux/amd64`。下文保留构建、缓存和升级细节，普通用户直接看[快速开始](quickstart.md)。
+当前交付为 `javazero/univpn-docker-gateway:0.3.0` 和 `:latest`，平台为 `linux/amd64`。下文保留构建、缓存和升级细节，普通用户直接看[快速开始](quickstart.md)。
 
 ## 0.2.0 发布记录（2026-10-29）
 
-- 两个公开标签指向同一 OCI index：`sha256:7d51acf542116f6d01eeda6645ee04cd7d646e35939d39382263fa033b168e25`。
+- 0.2.0 发布时，该版本与当时 latest 指向同一 OCI index（latest 为可变标签）：`sha256:7d51acf542116f6d01eeda6645ee04cd7d646e35939d39382263fa033b168e25`。
 - 镜像源码 revision：`006ce32659cf479acc4b264c975ec4f05bb649ed`；Linux/amd64 层压缩合计 43,671,687 字节，约 44 MB 下载，不代表运行内存。
 - 已通过匿名 Registry manifest/配置校验，并用空凭据配置实际执行 Docker CLI pull；不需要 Docker Hub 登录即可取得镜像。
 - 真实验收包含冷缓存官方下载、无网络新容器复用缓存、隔离官方引擎启动并停在未认证的 idle 状态，以及镜像导出 CMD 的实际密钥生成/只读 Plan/Compose 校验。
@@ -16,14 +16,20 @@
 
 用户无需在本机编译镜像。默认 [compose.yml](../compose.yml) 拉取公开镜像；首次 `run` 或 `prepare` 才在用户本机容器内从官方取得固定版本，校验后复制最小运行文件。`run` 接着启动认证服务，`prepare` 到此退出；二者都不执行厂商安装器的 shell 脚本。
 
-`export-client` 提前返回，只导出 `univpn.cmd` 和三个 PowerShell 文件，不下载厂商程序、不启动 VPN，也不需要 `NET_ADMIN` 或 TUN。仍需 Docker 使用权限和输出目录写权限。以下示例假定镜像已可获取，且当前目录还没有 `univpn` 子目录；本地无镜像时，Docker 自身仍需先拉取镜像：
+`export-client` 提前返回，只导出 `univpn.cmd` 和四个 PowerShell 文件，不下载厂商程序、不启动 VPN，也不需要 `NET_ADMIN` 或 TUN。仍需 Docker 使用权限和输出目录写权限。以下示例假定镜像已可获取，且当前目录还没有 `univpn` 子目录；本地无镜像时，Docker 自身仍需先拉取镜像：
 
 ```powershell
-docker run --rm --network none -v "${PWD}:/output" javazero/univpn-docker-gateway:0.2.0 export-client
+docker run --rm --network none -v "${PWD}:/output" javazero/univpn-docker-gateway:0.3.0 export-client
 .\univpn\univpn.cmd
 ```
 
-导出不会覆盖已有目录。`univpn.cmd` 启动本地向导，仅本次 PowerShell 进程使用 `ExecutionPolicy Bypass`，不修改持久执行策略；Windows 创建网络入口仍需单独的管理员确认。入口的实际分支见 [image_entrypoint.py](../univpn_gateway/image_entrypoint.py)。导出成功不等于 VPN 已连接。
+导出不会覆盖已有目录。`univpn.cmd` 启动本地向导，仅本次 PowerShell 进程使用 `ExecutionPolicy Bypass`，不修改持久执行策略；启动器在 Windows 检查并按需安装 WireGuard，再创建网络入口；两个动作可能分别请求管理员确认。入口的实际分支见 [image_entrypoint.py](../univpn_gateway/image_entrypoint.py)。导出成功不等于 VPN 已连接。
+
+## 0.3.0 的 Windows 引导
+
+用户只需预装 Docker Desktop。新增 `windows-prerequisites.ps1`；已有有效签名安装直接复用，完全缺失才从[官方目录](https://download.wireguard.com/windows-client/)取得 `wireguard-amd64-1.1.1.msi`，实际文件 3,293,184 字节、SHA256 `7bfed60ad61b785c914b38b61555a975488e1d3ec472dbfb2fcdf498fca75242`。本轮已用 Windows Authenticode 实测其签名 Valid、发布者 WireGuard LLC，未在本机卸载或重装现有 WireGuard。
+
+安装路径为 Windows 标准 Program Files；MSI 不随 Linux 镜像打包。调用 `msiexec /i ... /qn /norestart DO_NOT_LAUNCH=1`，正常权限使用 UAC，已提权进程直接安装；3010 要求用户重启并停止本次连接。安装行为依据[WireGuard 官方企业部署](https://git.zx2c4.com/wireguard-windows/about/docs/enterprise.md)和[Microsoft msiexec](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/msiexec)。部分安装或已有异常服务不会被自动修复或升级。
 
 ## 固定官方版本与校验
 
@@ -60,28 +66,28 @@ Compose 将 named volume `vendor-cache` 挂载到 `/var/cache/univpn`，固定�
 可以只迁移公开镜像：
 
 ```powershell
-docker image save -o univpn-gateway-0.2.0.tar javazero/univpn-docker-gateway:0.2.0
+docker image save -o univpn-gateway-0.3.0.tar javazero/univpn-docker-gateway:0.3.0
 # 在另一台机器上：
-docker image load -i univpn-gateway-0.2.0.tar
+docker image load -i univpn-gateway-0.3.0.tar
 ```
 
 `save/load` **不携带 named volume、厂商缓存、用户私钥或认证会话**。本地已有可信 ZIP 时，可按固定文件名放入目标机器实际使用的缓存卷；`prepare` 仍会核验全部摘要，可在禁止联网的情况下完成本地准备。此处不代表已验证离线全流程：真实 VPN 认证仍需访问网关，短信策略也仍需用户参与。不要将含厂商缓存的卷或改装后的镜像当作本项目公开制品分发。
 
 ## 维护者发布模板
 
-以下为本轮发布所用流程的可复现模板，只供有仓库发布权限的维护者显式执行。发布前先运行相应测试，并确认镜像不含厂商文件、私有配置和凭据。`latest` 可变；需要精确复现时，记录实际发布后的 digest，不能以本地 image ID 代替。
+以下为当前版本发布流程的可复现模板，只供有仓库发布权限的维护者显式执行。发布前先运行相应测试，并确认镜像不含厂商文件、私有配置和凭据。`latest` 可变；需要精确复现时，记录实际发布后的 digest，不能以本地 image ID 代替。
 
 ```powershell
 $revision = (git rev-parse HEAD).Trim()
 docker buildx build --platform linux/amd64 -f Dockerfile.public `
-  --build-arg VERSION=0.2.0 --build-arg "REVISION=$revision" `
-  -t javazero/univpn-docker-gateway:0.2.0 `
+  --build-arg VERSION=0.3.0 --build-arg "REVISION=$revision" `
+  -t javazero/univpn-docker-gateway:0.3.0 `
   -t javazero/univpn-docker-gateway:latest --load .
 
 docker login
-docker push javazero/univpn-docker-gateway:0.2.0
+docker push javazero/univpn-docker-gateway:0.3.0
 docker push javazero/univpn-docker-gateway:latest
-docker buildx imagetools inspect javazero/univpn-docker-gateway:0.2.0
+docker buildx imagetools inspect javazero/univpn-docker-gateway:0.3.0
 ```
 
 更新固定厂商版本须重新核对官方下载、外层 ZIP、内层 RUN、精确条目及六文件摘要，并做初始化、原生认证和数据面回归；不能只改版本字符串。公开镜像构建本身不应下载厂商包。

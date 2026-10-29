@@ -17,6 +17,7 @@ python -m unittest discover -s tests -v
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows_gateway_test.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows_profile_test.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows_client_test.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows_prerequisites_test.ps1
 ```
 
 Python 测试使用受控对象；Windows 测试模拟系统调用，不触发 UAC 或修改网络。网络集成测试只能放在一次性隔离环境执行，不在正在认证的正式容器命名空间运行。

@@ -7,7 +7,7 @@ import shutil
 import sys
 
 
-CLIENT_FILES = ("univpn.cmd", "univpn.ps1", "windows-profile.ps1", "windows-gateway.ps1")
+CLIENT_FILES = ("univpn.cmd", "univpn.ps1", "windows-profile.ps1", "windows-gateway.ps1", "windows-prerequisites.ps1")
 
 
 def export_client(destination, source=Path("/opt/gateway/client")):

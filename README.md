@@ -24,30 +24,29 @@
 
 [Agent 操作说明](docs/agent-setup.md)包含无需交互提问的配置入口、会话续接和验收标准。也可以自己执行下面两步。
 
-## 两步连接
+## Windows 首次使用
 
-先安装 **Docker Desktop（Linux 容器 / WSL2）** 和 [WireGuard for Windows](https://www.wireguard.com/install/)，启动 Docker Desktop。在要保存配置的目录打开 PowerShell：
+先安装并启动 **[Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/)（Windows x64，Linux 容器 / WSL2）**。WireGuard 由启动器按需安装，不用提前手动安装。
+
+在 Windows 新建一个空文件夹（例如桌面的 `vpn-demo`），在该文件夹中打开 **PowerShell**，依次运行：
 
 ```powershell
 docker run --rm -v "${PWD}:/output" javazero/univpn-docker-gateway:latest export-client
 .\univpn\univpn.cmd
 ```
 
-按提示填写网关（支持 `vpn.example.com:443`）、目标 CIDR 和 SSH 探针，然后输入账号、密码及需要的短信验证码。首次创建 Windows 专属网卡时确认一次 UAC。连接成功后直接使用 `ssh your-user@10.80.0.11`、浏览器或其他应用。
+第一条将 Windows 启动器导出到这个文件夹的 `univpn` 子目录。`univpn.cmd` 是启动脚本；第二条在**同一个 Windows PowerShell 窗口、同一个文件夹**执行它，`.\` 表示当前目录。
 
-**无需 Git、Python、本机构建、手填密钥或逐个映射 SSH 端口。** 镜像包含运行环境、配置生成器和 Windows 启动器；厂商组件首次从官方自动下载约 30 MB，逐层校验摘要后缓存，不随公开镜像分发。当前固定 Linux amd64 / **10781.21.0.0831**。
+启动器准备 WireGuard、生成配对配置并连接。按提示输入网关（如 `vpn.example.com:443`）、目标 CIDR 和 SSH 探针，再输入 VPN 账号密码及需要的短信。首次安装 WireGuard 和创建专属隧道可能分别要求管理员授权。
 
-已有 `univpn` 目录时直接运行第二条命令，保留密钥与当前认证会话；导出不会覆盖旧目录。自签证书需要独立核验后配置，[详见快速开始](docs/quickstart.md)。
+连接后，WindTerm、浏览器等应用直接填写原始内网 IP 和端口，例如 `ssh your-user@10.80.0.11`。无需 Git、Python、本机构建或手填密钥。[完整首次使用说明](docs/quickstart.md)
 
-## 日常使用
+## WireGuard 装在哪里
 
-```powershell
-.\univpn\univpn.cmd -Mode Status
-.\univpn\univpn.cmd -Mode Stop
-.\univpn\univpn.cmd
-```
+- **Windows 宿主机：** 使用官方 WireGuard，标准目录为 `C:\Program Files\WireGuard`，为应用提供网络入口。已有签名有效的安装会直接复用，不运行安装器或升级已有客户端；本项目只创建独立的 `univpn-*` 隧道。
+- **Docker 容器：** 运行 UniVPN、`wg0` 接口和转发规则，没有 Windows 客户端或桌面。官方 UniVPN 组件首次自动获取并校验缓存，当前固定 **10781.21.0.0831 / Linux amd64**。
 
-`Stop` 停止本实例的 VPN 容器，保留专属网卡、配置与下载缓存；最后一条重新连接。彻底移除该网卡用 `-Mode Remove`。第二套 VPN 使用不同的名称、UDP 端口和接入网段，见[多实例示例](docs/quickstart.md#再加一套-vpn)。
+原有 WireGuard 隧道保持运行。**目标 CIDR 重叠时仍会参与 Windows 选路竞争**，需核对实际路径；不能将独立隧道理解成所有流量都互不影响。
 
 ## 流量怎样走
 
@@ -59,7 +58,11 @@ flowchart LR
     CLI["终端账号 / 短信"] -. "控制官方引擎" .-> VPN
 ```
 
-宿主机依赖 Docker Desktop/WSL2 与 WireGuard；镜像预装 Ubuntu 22.04、Python 标准库和网络工具。每套 VPN 独立网络命名空间，无桌面、VNC 或 WireGuard 辅助容器。[完整依赖图与认证时序](docs/architecture.md)
+用户只需预装 Docker Desktop；Windows 启动器准备 WireGuard，镜像预装 Ubuntu 22.04、Python 标准库和网络工具。每套 VPN 独立网络命名空间，无桌面、VNC 或 WireGuard 辅助容器。[完整依赖图与认证时序](docs/architecture.md)
+
+## 能否只启动容器
+
+容器内的程序可以使用容器 VPN；Windows 应用按原始 IP 直连还需要宿主机网卡与路由，因此当前保留一个 Windows 启动器。HTTP/SOCKS 代理可省去 VPN 网卡，但需逐应用设置，能力范围也不同；当前镜像尚未提供该模式。[接入方案比较](docs/simplification.md)
 
 ## 验证与边界
 

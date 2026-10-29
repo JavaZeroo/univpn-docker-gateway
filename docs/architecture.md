@@ -1,6 +1,6 @@
 # 架构与依赖
 
-本页描述 0.2.0 的公开镜像与 Windows 客户端入口。默认镜像为 `javazero/univpn-docker-gateway:latest`，版本标签为 `0.2.0`；它包含自有前端、脚本及运行依赖，**不包含官方 UniVPN 安装包或二进制**。厂商组件在用户机器上首次启动时从官方获取。发布与离线边界见[镜像说明](image-release.md)。
+本页描述 0.3.0 的公开镜像与 Windows 客户端入口。默认镜像为 `javazero/univpn-docker-gateway:latest`，版本标签为 `0.3.0`；它包含自有前端、脚本及运行依赖，**不包含官方 UniVPN 安装包或二进制**。厂商组件在用户机器上首次启动时从官方获取。发布与离线边界见[镜像说明](image-release.md)。
 
 ## 一套 VPN 对应一个网络命名空间
 
@@ -26,7 +26,7 @@ WireGuard 提供 Windows 到容器的三层入口，远端连接仍由 UniVPN �
 
 ```mermaid
 flowchart TB
-    Hub["公开镜像<br/>自有代码 + 开源运行依赖"] --> Export["export-client<br/>导出 CMD 入口 + 三个 PS 脚本"]
+    Hub["公开镜像<br/>自有代码 + 开源运行依赖"] --> Export["export-client<br/>导出 CMD 入口 + 四个 PS 脚本"]
     Export --> Client["univpn.cmd → univpn.ps1<br/>profile / Compose / 交互认证"]
     Client --> Entry["容器 image_entrypoint"]
     Entry --> Prepare["prepare_vendor<br/>检查本实例已安装文件"]
@@ -44,7 +44,15 @@ flowchart TB
 
 缓存只保存验证过的 ZIP，带互斥和原子发布；每个容器复制出自己的厂商文件，不把会被引擎修改的配置目录放入共享缓存。默认 Compose 项目各有自己的 named volume；重建同一项目可复用缓存，不等于所有实例共享一次下载。缓存损坏或摘要变化会失败，不回退到第三方或未校验包。
 
-`export-client` 导出 `univpn.cmd`、`univpn.ps1`、`windows-profile.ps1`、`windows-gateway.ps1` 到新的 `/output/univpn` 目录；不下载厂商程序，不启动 VPN，也不需要网络管理权限。导出拒绝合并覆盖旧目录。CMD 入口只调用同目录的 PowerShell 实现，执行策略例外限于该进程。
+`export-client` 导出 `univpn.cmd`、`univpn.ps1`、`windows-profile.ps1`、`windows-gateway.ps1`、`windows-prerequisites.ps1` 到新的 `/output/univpn` 目录；不下载厂商程序，不启动 VPN，也不需要网络管理权限。导出拒绝合并覆盖旧目录。CMD 入口只调用同目录的 PowerShell 实现，执行策略例外限于该进程。
+
+## Windows 宿主机引导
+
+`univpn.cmd` 是镜像导出的 Windows 启动脚本，在用户选定空文件夹的 PowerShell 中运行。`windows-prerequisites.ps1` 由 Init/Connect 调用：标准目录下两个官方程序签名有效则复用，完全未安装时才获取固定 MSI、校验 SHA256 和 WireGuard LLC 签名后安装。部分安装、自定义位置或已有异常服务会先停止，不升级/修复既有客户端。
+
+安装目标是 Windows 的 `C:\Program Files\WireGuard`，不在 Docker VM 中。MSI 使用 `/qn /norestart DO_NOT_LAUNCH=1`，不自动重启或打开 GUI；返回 3010 时先告知需要重启，停止后续连接。安装程序与后续专属 tunnel 创建可能分别需要 UAC。宿主机准备与 Linux 容器准备是两个步骤，Docker 镜像本身不会跨越这条权限边界。
+
+只新增 `univpn-*` 隧道，已有 WireGuard 安装不运行 MSI；目标 CIDR 重叠时仍有实际选路竞争。关于三种接入方式，见[简化分析](simplification.md)。
 
 ## Windows 的连续入口
 
@@ -57,6 +65,7 @@ sequenceDiagram
     participant Service as native_service / UniVPNCS
     participant Windows as 专属 Windows tunnel
     User->>Client: Connect（默认动作）
+    Client->>Windows: 检查 WireGuard；缺失才校验 MSI 并请求安装
     Client->>Profile: 首次 Init：配置、双端密钥、受限文件
     Profile-->>Client: 校验目标、地址、端口及路由计划
     Client->>Docker: 启动本实例，缺少镜像才拉取
@@ -112,7 +121,7 @@ WSL2 是本次部署后端，并非 Docker Desktop 唯一可能的后端。当�
 
 | 状态或文件 | 生命周期 |
 | --- | --- |
-| 导出的四个客户端文件 | 跟随镜像版本；再次导出用新目录，不覆盖已有客户端 |
+| 导出的五个客户端文件 | 跟随镜像版本；再次导出用新目录，不覆盖已有客户端 |
 | `private/<name>/profile.json`、`vpn.json`、双端 WG 配置 | 本机 profile；密钥不覆盖，目标从单份配置配对；运行中修改 JSON 不自动刷新白名单 |
 | profile 内生成的 `compose.yml` | 固定该实例的镜像、端口、项目与挂载；已有 profile 不会因重复 Connect 自动升级镜像 |
 | `vendor-cache` named volume | 只缓存固定 ZIP；停止或普通 `compose down` 不删除卷 |
