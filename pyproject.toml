@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "univpn-docker-gateway"
-version = "0.1.0"
+version = "0.2.0"
 description = "Experimental subnet gateway and terminal authentication for the official UniVPN client"
 requires-python = ">=3.10"
 license = {text = "GPL-3.0-only"}

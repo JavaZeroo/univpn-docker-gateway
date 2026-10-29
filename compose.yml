@@ -1,11 +1,6 @@
 services:
   vpn:
-    image: univpn-docker-gateway:local
-    build:
-      context: .
-      target: native
-      args:
-        UNIVPN_SHA256: ${UNIVPN_SHA256:?Set the installer SHA256 in .env}
+    image: ${UVPN_IMAGE:-javazero/univpn-docker-gateway:latest}
     cap_add: [NET_ADMIN]
     devices: [/dev/net/tun:/dev/net/tun]
     sysctls:
@@ -13,7 +8,9 @@ services:
     ports:
       - "127.0.0.1:${WG_PORT:-51829}:51820/udp"
     volumes:
-      - ${VPN_CONFIG_DIR:-./private}:/config:ro
+      - ${VPN_CONFIG_DIR:-./private}/vpn.json:/config/vpn.json:ro
+      - ${VPN_CONFIG_DIR:-./private}/wg0.conf:/config/wg0.conf:ro
+      - vendor-cache:/var/cache/univpn
     tmpfs:
       - /run
       - /tmp
@@ -27,3 +24,5 @@ services:
     logging:
       # The vendor CLI echoes usernames. Keep interactive authentication out of logs.
       driver: none
+volumes:
+  vendor-cache:

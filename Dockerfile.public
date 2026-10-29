@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1
+# Public image: all open runtime dependencies and client automation, no vendor binaries.
+FROM ubuntu:22.04
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 iproute2 iptables wireguard-tools ca-certificates tini \
+    && rm -rf /var/lib/apt/lists/*
+ARG VERSION=0.2.0
+ARG REVISION=unknown
+LABEL org.opencontainers.image.title="UniVPN Docker Gateway" \
+      org.opencontainers.image.description="Terminal MFA and isolated IPv4 VPN gateway; official client fetched and verified on first use" \
+      org.opencontainers.image.source="https://github.com/JavaZeroo/univpn-docker-gateway" \
+      org.opencontainers.image.licenses="GPL-3.0-only" \
+      org.opencontainers.image.version=$VERSION \
+      org.opencontainers.image.revision=$REVISION
+COPY univpn_gateway /opt/gateway/univpn_gateway
+COPY scripts/vpnctl /usr/local/bin/vpnctl
+COPY scripts/univpn.cmd scripts/univpn.ps1 scripts/windows-profile.ps1 scripts/windows-gateway.ps1 /opt/gateway/client/
+COPY LICENSE /usr/share/doc/univpn-docker-gateway/LICENSE
+RUN chmod 755 /usr/local/bin/vpnctl
+ENV USER=root HOME=/root PYTHONPATH=/opt/gateway VPN_BACKEND=native \
+    LD_LIBRARY_PATH=/usr/local/UniVPN/serviceclient
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 CMD vpnctl status
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/bin/python3", "-m", "univpn_gateway.image_entrypoint"]

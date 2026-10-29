@@ -1,0 +1,9 @@
+# Optional local build. Default compose.yml pulls the public ready-to-run image.
+services:
+  vpn:
+    image: univpn-docker-gateway:local
+    build:
+      context: .
+      target: native
+      args:
+        UNIVPN_SHA256: ${UNIVPN_SHA256:?Set the local installer SHA256}

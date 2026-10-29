@@ -31,6 +31,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows_gateway_test.ps1
+      - run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows_profile_test.ps1
+      - run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows_client_test.ps1
+  public-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f Dockerfile.public -t univpn-public:test .
+      - run: docker run --rm univpn-public:test --help
+      - name: Image contains no vendor runtime or private profile
+        run: docker run --rm --entrypoint sh univpn-public:test -c 'test ! -e /usr/local/UniVPN/serviceclient/UniVPNCS && test ! -e /opt/gateway/client/private'
+      - name: Export client without VPN or administrator capabilities
+        run: |
+          mkdir -p "$RUNNER_TEMP/univpn-client"
+          docker run --rm -v "$RUNNER_TEMP/univpn-client:/output" univpn-public:test export-client
+          test -f "$RUNNER_TEMP/univpn-client/univpn/univpn.ps1"
   accessibility:
     runs-on: ubuntu-22.04
     timeout-minutes: 5

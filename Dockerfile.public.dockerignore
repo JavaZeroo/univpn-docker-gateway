@@ -1,0 +1,11 @@
+**
+!Dockerfile.public
+!univpn_gateway/
+!univpn_gateway/*.py
+!scripts/
+!scripts/vpnctl
+!scripts/univpn.ps1
+!scripts/univpn.cmd
+!scripts/windows-profile.ps1
+!scripts/windows-gateway.ps1
+!LICENSE
