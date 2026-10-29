@@ -2,6 +2,8 @@
 
 需要 Windows、运行中的 Docker Desktop（Linux 容器 / WSL2）及 [WireGuard for Windows](https://www.wireguard.com/install/)。不需要 Git、Python 或本机构建。
 
+希望交给本机 Agent 操作时，使用[Agent 部署指南](agent-setup.md)；它支持先生成配置，再由用户完成终端认证。
+
 ## 首次连接：两条命令
 
 在保存配置的目录打开 PowerShell：

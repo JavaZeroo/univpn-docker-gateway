@@ -8,9 +8,21 @@
 </p>
 <p align="center"><strong>多个 UniVPN 共存，终端输入短信，Windows 直接访问内网 IP。</strong></p>
 <p align="center">
-  <a href="docs/quickstart.md">快速开始</a> · <a href="docs/architecture.md">架构与依赖</a> ·
+  <a href="docs/agent-setup.md">Agent 部署</a> · <a href="docs/quickstart.md">快速开始</a> · <a href="docs/architecture.md">架构与依赖</a> ·
   <a href="docs/simplification.md">简化设计</a> · <a href="docs/subnet-gateway-validation.md">实测记录</a>
 </p>
+
+## 交给你的 Agent
+
+把下面这段发给能执行本机终端命令的 Agent，按需补充网关和目标即可：
+
+```text
+请按 https://raw.githubusercontent.com/JavaZeroo/univpn-docker-gateway/main/docs/agent-setup.md 在本机部署 UniVPN Docker Gateway。
+自动完成环境检查、配置生成、连接和真实连通验证；缺少网关、目标 CIDR 或 SSH 探针时先问我。
+保留现有 VPN 和密钥；账号、密码、短信及系统授权由我在终端或系统弹窗中完成。
+```
+
+[Agent 操作说明](docs/agent-setup.md)包含无需交互提问的配置入口、会话续接和验收标准。也可以自己执行下面两步。
 
 ## 两步连接
 
